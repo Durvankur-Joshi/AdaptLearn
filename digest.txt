@@ -1,9 +1,10 @@
 Directory structure:
-└── Final/
+└── AdaptiveLearning/
     ├── tempCodeRunnerFile.python
     ├── backend/
     │   ├── a.py
     │   ├── manage.py
+    │   ├── Procfile
     │   ├── req.txt
     │   ├── requirements.txt
     │   ├── accounts/
@@ -298,6 +299,12 @@ if __name__ == '__main__':
 
 
 ================================================
+FILE: backend/Procfile
+================================================
+web: gunicorn core.wsgi
+
+
+================================================
 FILE: backend/req.txt
 ================================================
 pip install django djangorestframework
@@ -314,19 +321,81 @@ pip install dotenv groq numpy
 ================================================
 FILE: backend/requirements.txt
 ================================================
-django==6.0.2
-djangorestframework==3.16.1
-djangorestframework-simplejwt==5.5.1
+aiohappyeyeballs==2.6.1
+aiohttp==3.13.3
+aiosignal==1.4.0
+annotated-types==0.7.0
+anyio==4.12.1
+asgiref==3.11.1
+attrs==25.4.0
+certifi==2026.1.4
+cffi==2.0.0
+charset-normalizer==3.4.4
+click==8.3.1
+colorama==0.4.6
+cryptography==46.0.5
+distro==1.9.0
+Django==6.0.2
 django-cors-headers==4.9.0
-python-dotenv==1.2.1
-groq==1.0.0
-google-genai==1.62.0
+djangorestframework==3.16.1
+djangorestframework_simplejwt==5.5.1
+dotenv==0.9.9
+frozenlist==1.8.0
+gitingest==0.3.1
+google-ai-generativelanguage==0.6.15
+google-api-core==2.25.2
+google-api-python-client==2.190.0
+google-auth==2.49.0.dev0
+google-auth-httplib2==0.3.0
+google-genai==1.64.0
 google-generativeai==0.8.6
+googleapis-common-protos==1.72.0
+groq==1.0.0
+grpcio==1.78.1
+grpcio-status==1.71.2
+gunicorn==25.1.0
+h11==0.16.0
+httpcore==1.0.9
+httplib2==0.31.2
+httpx==0.28.1
+idna==3.11
+loguru==0.7.3
+multidict==6.7.1
 numpy==2.4.2
+packaging==26.0
+pathspec==1.0.4
+propcache==0.4.1
+proto-plus==1.27.1
+protobuf==5.29.6
+pyasn1==0.6.2
+pyasn1_modules==0.4.2
+pycparser==3.0
+pydantic==2.12.5
+pydantic_core==2.41.5
+PyJWT==2.11.0
+pyparsing==3.3.2
+python-dotenv==1.2.1
+regex==2026.2.19
 requests==2.32.5
-youtube-search==2.2.0
 serpapi==0.1.5
-pillow==12.1.0
+sniffio==1.3.1
+sqlparse==0.5.5
+starlette==0.52.1
+tenacity==9.1.4
+tiktoken==0.12.0
+tqdm==4.67.3
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata==2025.3
+uritemplate==4.2.0
+urllib3==2.6.3
+uv==0.10.4
+websockets==15.0.1
+whitenoise==6.11.0
+win32_setctime==1.2.0
+yarl==1.22.0
+youtube-search==2.2.0
+youtube-search-python==1.6.6
 
 
 
@@ -2373,7 +2442,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-gq5gu@@4-^r(35**5w-v6l-qkkr@aut890$z=lx^e_%1$q+nb%'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = ["*"]
 
@@ -2401,6 +2470,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',  # Add this
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -2476,20 +2546,19 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS settings
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5174",
-]
+# CORS_ALLOWED_ORIGINS = [
+#     "*"
+# ]
+
+CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -2502,6 +2571,8 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ),
 }
+
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # JWT settings
 SIMPLE_JWT = {
@@ -5272,7 +5343,7 @@ FILE: frontend/src/axiosConfig.js
 import axios from 'axios';
 
 const axiosInstance = axios.create({
-    baseURL: 'http://localhost:8000',
+    baseURL: 'http://localhost:8000', // Use the correct backend API root
     headers: {
         'Content-Type': 'application/json',
     },
@@ -5306,7 +5377,7 @@ axiosInstance.interceptors.response.use(
             try {
                 const refreshToken = localStorage.getItem('refresh_token');
                 if (refreshToken) {
-                    const response = await axios.post('http://localhost:8000/api/token/refresh/', {
+                    const response = await axios.post('https://hackathon-gcoeara.onrender.com/api/token/refresh/', {
                         refresh: refreshToken
                     });
                     
@@ -5568,7 +5639,7 @@ Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in posi
 ================================================
 FILE: frontend/src/components/Home.jsx
 ================================================
-Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 2717: character maps to <undefined>
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 2993: character maps to <undefined>
 
 
 ================================================
@@ -5915,11 +5986,10 @@ const ThemeToggle = () => {
             aria-label="Toggle theme"
         >
             <span
-                className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full transition-all duration-300 flex items-center justify-center text-sm ${
-                    theme === 'dark'
+                className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full transition-all duration-300 flex items-center justify-center text-sm ${theme === 'dark'
                         ? 'translate-x-7 bg-indigo-500 text-white'
                         : 'translate-x-0 bg-yellow-400 text-yellow-900'
-                }`}
+                    }`}
             >
                 {theme === 'dark' ? '🌙' : '☀️'}
             </span>
@@ -5947,13 +6017,13 @@ const Navbar = ({ variant = 'default' }) => {
             { path: '/calendar', label: 'Calendar', icon: '📅' },
             { path: '/leaderboard', label: 'Leaderboard', icon: '🏆' },
             { path: '/learn/start', label: 'New Session', icon: '▶️' },
-            { path: '/planner', label: 'Planner', icon: '📅' }, 
-          ]
+            { path: '/planner', label: 'Planner', icon: '🧠' },
+        ]
         : [];
 
     return (
-        <nav className="sticky top-0 z-50 glass-strong">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <nav className="sticky top-0 z-50 glass-strong w-full">
+            <div className="max-w-7xl mx-auto px-2 sm:px-4 lg:px-8">
                 <div className="flex justify-between h-16 items-center">
                     {/* Logo */}
                     <Link to={user ? '/dashboard' : '/'} className="flex items-center gap-2 group">
@@ -5972,11 +6042,11 @@ const Navbar = ({ variant = 'default' }) => {
                                 <Link
                                     key={link.path}
                                     to={link.path}
-                                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                                        isActive(link.path)
+                                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${isActive(link.path)
                                             ? 'bg-primary/10 text-primary'
                                             : 'text-theme-text-secondary hover:text-theme-text hover:bg-surface-alt'
-                                    }`}
+                                        }`}
+                                    tabIndex={0}
                                 >
                                     <span className="mr-1.5">{link.icon}</span>
                                     {link.label}
@@ -6028,10 +6098,13 @@ const Navbar = ({ variant = 'default' }) => {
                         {/* Mobile hamburger */}
                         {user && (
                             <button
-                                className="md:hidden p-2 rounded-lg text-theme-text-secondary hover:bg-surface-alt"
+                                className="md:hidden p-2 rounded-lg text-theme-text-secondary hover:bg-surface-alt focus:outline-none focus:ring-2 focus:ring-primary"
                                 onClick={() => setMobileOpen(!mobileOpen)}
+                                aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+                                aria-expanded={mobileOpen}
+                                aria-controls="mobile-menu"
                             >
-                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     {mobileOpen ? (
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                                     ) : (
@@ -6043,27 +6116,46 @@ const Navbar = ({ variant = 'default' }) => {
                     </div>
                 </div>
 
-                {/* Mobile nav */}
+                {/* Mobile nav with backdrop */}
                 {mobileOpen && user && (
-                    <div className="md:hidden pb-4 pt-2 border-t border-theme-border animate-fade-in">
-                        <div className="flex flex-col gap-1">
-                            {navLinks.map(link => (
-                                <Link
-                                    key={link.path}
-                                    to={link.path}
-                                    onClick={() => setMobileOpen(false)}
-                                    className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                                        isActive(link.path)
-                                            ? 'bg-primary/10 text-primary'
-                                            : 'text-theme-text-secondary hover:bg-surface-alt'
-                                    }`}
+                    <>
+                        <div className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm md:hidden" onClick={() => setMobileOpen(false)} aria-hidden="true"></div>
+                        <div id="mobile-menu" className="md:hidden fixed top-0 right-0 w-4/5 max-w-xs h-full bg-surface shadow-lg z-50 animate-slide-in flex flex-col pt-6 pb-8 px-6 gap-2">
+                            <div className="flex justify-between items-center mb-6">
+                                <span className="text-lg font-bold text-theme-text">Menu</span>
+                                <button onClick={() => setMobileOpen(false)} aria-label="Close menu" className="p-2 rounded-lg hover:bg-surface-alt">
+                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <div className="flex flex-col gap-2">
+                                {navLinks.map(link => (
+                                    <Link
+                                        key={link.path}
+                                        to={link.path}
+                                        onClick={() => setMobileOpen(false)}
+                                        className={`px-4 py-3 rounded-lg text-base font-medium transition-colors ${isActive(link.path)
+                                                ? 'bg-primary/10 text-primary'
+                                                : 'text-theme-text-secondary hover:bg-surface-alt'
+                                            }`}
+                                        tabIndex={0}
+                                    >
+                                        <span className="mr-2">{link.icon}</span>
+                                        {link.label}
+                                    </Link>
+                                ))}
+                            </div>
+                            <div className="mt-auto flex flex-col gap-2 pt-8">
+                                <button
+                                    onClick={handleLogout}
+                                    className="w-full px-4 py-3 rounded-lg text-base font-medium text-error hover:bg-error/10 transition-colors"
                                 >
-                                    <span className="mr-2">{link.icon}</span>
-                                    {link.label}
-                                </Link>
-                            ))}
+                                    Logout
+                                </button>
+                            </div>
                         </div>
-                    </div>
+                    </>
                 )}
             </div>
         </nav>
