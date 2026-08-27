@@ -1,0 +1,3771 @@
+Directory structure:
+└── backend/
+    ├── a.py
+    ├── manage.py
+    ├── req.txt
+    ├── accounts/
+    │   ├── __init__.py
+    │   ├── admin.py
+    │   ├── apps.py
+    │   ├── models.py
+    │   ├── planner_engine.py
+    │   ├── serializers.py
+    │   ├── tests.py
+    │   ├── urls.py
+    │   ├── views.py
+    │   └── migrations/
+    │       ├── 0001_initial.py
+    │       ├── 0002_concept_created_by.py
+    │       ├── 0003_learningsession_knowledge_level_and_more.py
+    │       ├── 0004_add_error_history_default.py
+    │       ├── 0005_learningsession_break_count_and_more.py
+    │       ├── 0006_userxp.py
+    │       ├── 0007_questionapproval_teachergoal_teacheroverride_and_more.py
+    │       ├── 0008_alter_teacherprofile_is_active.py
+    │       ├── 0009_studyplanner_plannersubject.py
+    │       ├── 0010_studyplanitem.py
+    │       └── __init__.py
+    ├── core/
+    │   ├── __init__.py
+    │   ├── asgi.py
+    │   ├── settings.py
+    │   ├── urls.py
+    │   └── wsgi.py
+    └── learning_engine/
+        ├── __init__.py
+        ├── adaptive_flow.py
+        ├── ai_assistant.py
+        ├── ai_study_planner.py
+        ├── external_resources.py
+        ├── knowledge_tracing.py
+        ├── models.py
+        ├── pacing_engine.py
+        ├── question_generator.py
+        └── utils.py
+
+================================================
+FILE: a.py
+================================================
+# backend/test_question_generator.py
+
+import os
+import sys
+import django
+
+# Setup Django environment
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
+django.setup()
+
+from learning_engine.question_generator import QuestionGenerator
+from django.conf import settings
+
+def test_generator():
+    print("=" * 50)
+    print("Testing QuestionGenerator")
+    print("=" * 50)
+    
+    print(f"GROQ_API_KEY present: {'Yes' if settings.GROQ_API_KEY else 'No'}")
+    print(f"GOOGLE_API_KEY present: {'Yes' if settings.GOOGLE_API_KEY else 'No'}")
+    
+    generator = QuestionGenerator()
+    print(f"Groq client initialized: {'Yes' if generator.groq_client else 'No'}")
+    print(f"Gemini model initialized: {'Yes' if generator.gemini_model else 'No'}")
+    
+    if not generator.groq_client and not generator.gemini_model:
+        print("\n❌ ERROR: No AI clients available! Check your API keys.")
+        return
+    
+    print("\n" + "=" * 50)
+    print("Test 1: Generate atoms")
+    print("=" * 50)
+    atoms = generator.generate_atoms("Microprocessor", "Memory Organization")
+    print(f"Generated atoms: {atoms}")
+    
+    if atoms:
+        print("\n" + "=" * 50)
+        print("Test 2: Generate questions for first atom")
+        print("=" * 50)
+        questions = []
+        questions.extend(generator.generate_questions(
+            subject="Microprocessor",
+            concept="Memory Organization",
+            atom=atoms[0],
+            target_difficulty="easy",
+            count=2,
+            knowledge_level='intermediate'
+        ))
+        questions.extend(generator.generate_questions(
+            subject="Microprocessor",
+            concept="Memory Organization",
+            atom=atoms[0],
+            target_difficulty="medium",
+            count=2,
+            knowledge_level='intermediate'
+        ))
+        print(f"Generated {len(questions)} questions")
+        for i, q in enumerate(questions):
+            print(f"\nQ{i+1}: {q.get('question', 'No question')}")
+            print(f"   Difficulty: {q.get('difficulty')}")
+            print(f"   Cognitive: {q.get('cognitive_operation')}")
+            print(f"   Time: {q.get('estimated_time')}s")
+    
+    print("\n" + "=" * 50)
+    print("Test 3: Generate complete concept")
+    print("=" * 50)
+    result = generator.generate_complete_concept("Microprocessor", "Memory Organization")
+    print(f"Generated concept with {len(result.get('atoms', {}))} atoms")
+    for atom_name, atom_data in result['atoms'].items():
+        print(f"  - {atom_name}: {len(atom_data['questions'])} questions")
+
+if __name__ == "__main__":
+    test_generator()
+
+
+================================================
+FILE: manage.py
+================================================
+#!/usr/bin/env python
+"""Django's command-line utility for administrative tasks."""
+import os
+import sys
+
+
+def main():
+    """Run administrative tasks."""
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
+    try:
+        from django.core.management import execute_from_command_line
+    except ImportError as exc:
+        raise ImportError(
+            "Couldn't import Django. Are you sure it's installed and "
+            "available on your PYTHONPATH environment variable? Did you "
+            "forget to activate a virtual environment?"
+        ) from exc
+    execute_from_command_line(sys.argv)
+
+
+if __name__ == '__main__':
+    main()
+
+
+
+================================================
+FILE: req.txt
+================================================
+pip install django djangorestframework
+pip install djangorestframework-simplejwt
+pip install django-cors-headers
+pip install youtube-search-python
+pip install serpapi
+pip install google.generativeai
+pip install youtube-search
+pip install dotenv groq numpy
+
+
+
+================================================
+FILE: accounts/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: accounts/admin.py
+================================================
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x9d in position 1160: character maps to <undefined>
+
+
+================================================
+FILE: accounts/apps.py
+================================================
+from django.apps import AppConfig
+
+
+class AccountsConfig(AppConfig):
+    name = 'accounts'
+
+
+
+================================================
+FILE: accounts/models.py
+================================================
+from django.db import models
+from django.contrib.auth.models import User
+import json
+
+class LearningProfile(models.Model):
+    """Student's learning profile and progress"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='learning_profile')
+    overall_theta = models.FloatField(default=0.0)  # IRT ability parameter
+    current_subject = models.CharField(max_length=100, blank=True)
+    current_concept = models.CharField(max_length=100, blank=True)
+    learning_streak = models.IntegerField(default=0)
+    total_time_spent = models.IntegerField(default=0)  # in minutes
+    last_active = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'learning_profile'
+
+class Concept(models.Model):
+    """Learning concepts and atoms"""
+    DIFFICULTY_CHOICES = [
+        ('easy', 'Easy'),
+        ('medium', 'Medium'),
+        ('hard', 'Hard'),
+    ]
+    
+    name = models.CharField(max_length=200)
+    subject = models.CharField(max_length=100)
+    created_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_concepts'
+    )
+    description = models.TextField(blank=True)
+    prerequisites = models.ManyToManyField('self', symmetrical=False, blank=True)
+    difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES, default='medium')
+    order = models.IntegerField(default=0)
+    
+    class Meta:
+        ordering = ['subject', 'order']
+        unique_together = ['name', 'subject', 'created_by']
+
+class TeachingAtom(models.Model):
+    """Atomic learning units"""
+    PHASE_CHOICES = [
+        ('diagnostic', 'Diagnostic'),
+        ('teaching', 'Teaching'),
+        ('practice', 'Practice'),
+        ('reinforcement', 'Reinforcement'),
+        ('mastery_check', 'Mastery Check'),
+        ('complete', 'Complete'),
+    ]
+    
+    name = models.CharField(max_length=200)
+    concept = models.ForeignKey(Concept, on_delete=models.CASCADE, related_name='atoms')
+    explanation = models.TextField(blank=True)
+    analogy = models.TextField(blank=True)
+    examples = models.JSONField(default=list)
+    order = models.IntegerField(default=0)
+    
+    class Meta:
+        ordering = ['concept', 'order']
+
+class Question(models.Model):
+    """Practice questions"""
+    DIFFICULTY_CHOICES = [
+        ('easy', 'Easy'),
+        ('medium', 'Medium'),
+        ('hard', 'Hard'),
+    ]
+    
+    COGNITIVE_CHOICES = [
+        ('recall', 'Recall'),
+        ('apply', 'Apply'),
+        ('analyze', 'Analyze'),
+    ]
+    
+    atom = models.ForeignKey(TeachingAtom, on_delete=models.CASCADE, related_name='questions')
+    difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES)
+    cognitive_operation = models.CharField(max_length=10, choices=COGNITIVE_CHOICES)
+    estimated_time = models.IntegerField(default=60)  # in seconds
+    question_text = models.TextField()
+    options = models.JSONField(default=list)
+    correct_index = models.IntegerField()
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'difficulty': self.difficulty,
+            'cognitive_operation': self.cognitive_operation,
+            'estimated_time': self.estimated_time,
+            'question': self.question_text,
+            'options': self.options,
+            'correct_index': self.correct_index,
+        }
+
+class StudentProgress(models.Model):
+    """Track student progress on atoms â€” enriched for 10-feature pacing engine."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='progress')
+    atom = models.ForeignKey(TeachingAtom, on_delete=models.CASCADE)
+    mastery_score = models.FloatField(default=0.3)
+    phase = models.CharField(max_length=20, choices=TeachingAtom.PHASE_CHOICES, default='diagnostic')
+    streak = models.IntegerField(default=0)
+    hint_usage = models.IntegerField(default=0)
+    error_history = models.JSONField(default=list)
+    retention_verified = models.BooleanField(default=False)
+    last_practiced = models.DateTimeField(auto_now=True)
+    times_practiced = models.IntegerField(default=0)
+
+    # â”€â”€ Feature 2: per-atom learning speed â”€â”€
+    time_per_question = models.JSONField(default=list, blank=True)  # list of floats (seconds)
+
+    # â”€â”€ Feature 6: retention tracking â”€â”€
+    retention_score = models.FloatField(default=1.0)
+    retention_checks_passed = models.IntegerField(default=0)
+    retention_checks_failed = models.IntegerField(default=0)
+    next_review_at = models.DateTimeField(null=True, blank=True)
+
+    # â”€â”€ Feature 10: velocity snapshots â”€â”€
+    velocity_snapshots = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        unique_together = ['user', 'atom']
+
+
+    
+class KnowledgeLevel(models.TextChoices):
+    ZERO = 'zero', 'Zero Knowledge'
+    BEGINNER = 'beginner', 'Beginner'
+    INTERMEDIATE = 'intermediate', 'Intermediate'
+    ADVANCED = 'advanced', 'Advanced'
+
+
+class LearningSession(models.Model):
+    """Track learning sessions â€” enriched for 10-feature pacing engine."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='learning_sessions')
+    concept = models.ForeignKey(Concept, on_delete=models.CASCADE)
+    start_time = models.DateTimeField(auto_now_add=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    questions_answered = models.IntegerField(default=0)
+    correct_answers = models.IntegerField(default=0)
+    hints_used = models.IntegerField(default=0)
+    session_data = models.JSONField(default=dict)
+    knowledge_level = models.CharField(
+        max_length=20,
+        choices=KnowledgeLevel.choices,
+        default=KnowledgeLevel.ZERO
+    )
+    user_feedback = models.JSONField(default=dict)
+
+    # â”€â”€ Feature 8: fatigue tracking â”€â”€
+    fatigue_level = models.CharField(max_length=20, default='fresh')   # fresh|mild|moderate|high|critical
+    break_count = models.IntegerField(default=0)
+    last_break_at = models.DateTimeField(null=True, blank=True)
+
+    # â”€â”€ Feature 9: engagement â”€â”€
+    engagement_score = models.FloatField(default=0.7)
+    consecutive_skips = models.IntegerField(default=0)
+
+    # â”€â”€ Feature 10: session-level velocity snapshots â”€â”€
+    velocity_data = models.JSONField(default=list, blank=True)  
+
+
+class UserXP(models.Model):
+    """Track XP points for leaderboard"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='xp_profile')
+    total_xp = models.IntegerField(default=0)
+    questions_xp = models.IntegerField(default=0)
+    atoms_xp = models.IntegerField(default=0)
+    concepts_xp = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'user_xp'
+        ordering = ['-total_xp']
+
+    def __str__(self):
+        return f"{self.user.username} - {self.total_xp} XP"
+
+    def award_xp(self, amount, category='questions'):
+        """Award XP and update totals"""
+        self.total_xp += amount
+        if category == 'questions':
+            self.questions_xp += amount
+        elif category == 'atoms':
+            self.atoms_xp += amount
+        elif category == 'concepts':
+            self.concepts_xp += amount
+        self.save()
+
+
+# ==================== TEACHER MODELS ====================
+
+class TeacherProfile(models.Model):
+    """Teacher profile linked to a User"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='teacher_profile')
+    subject = models.CharField(max_length=200, blank=True)
+    bio = models.TextField(blank=True)
+    is_active = models.BooleanField(default=False)  # Requires admin approval
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'teacher_profile'
+
+    def __str__(self):
+        return f"Teacher: {self.user.username} ({self.subject})"
+
+
+class TeacherContent(models.Model):
+    """Custom teaching content created by teachers for specific atoms"""
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('published', 'Published'),
+        ('archived', 'Archived'),
+    ]
+
+    teacher = models.ForeignKey(User, on_delete=models.CASCADE, related_name='teacher_contents')
+    atom = models.ForeignKey(TeachingAtom, on_delete=models.CASCADE, related_name='teacher_contents')
+    explanation = models.TextField(blank=True, help_text='Custom explanation for the atom')
+    analogy = models.TextField(blank=True, help_text='Custom analogy')
+    examples = models.JSONField(default=list, help_text='Custom examples')
+    tips = models.TextField(blank=True, help_text='Teaching tips for students')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='published')
+    priority = models.BooleanField(default=True, help_text='If true, shown before AI content')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'teacher_content'
+        unique_together = ['teacher', 'atom']
+        ordering = ['-priority', '-updated_at']
+
+    def __str__(self):
+        return f"Content by {self.teacher.username} for {self.atom.name}"
+
+
+class QuestionApproval(models.Model):
+    """Track teacher approval/rejection of AI-generated questions"""
+    STATUS_CHOICES = [
+        ('pending', 'Pending Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('edited', 'Edited & Approved'),
+        ('disabled', 'Disabled'),
+    ]
+
+    question = models.OneToOneField(Question, on_delete=models.CASCADE, related_name='approval')
+    teacher = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='question_approvals')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    feedback = models.TextField(blank=True, help_text='Teacher feedback on the question')
+    edited_question_text = models.TextField(blank=True)
+    edited_options = models.JSONField(default=list, blank=True)
+    edited_correct_index = models.IntegerField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'question_approval'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Q#{self.question.id} - {self.status}"
+
+
+class TeacherOverride(models.Model):
+    """Teacher interventions on student progress"""
+    ACTION_CHOICES = [
+        ('reset_mastery', 'Reset Mastery'),
+        ('assign_atom', 'Assign Specific Atom'),
+        ('force_review', 'Force Review'),
+        ('set_mastery', 'Set Mastery Level'),
+        ('assign_remedial', 'Assign Remedial Content'),
+        ('skip_atom', 'Skip Atom'),
+    ]
+
+    teacher = models.ForeignKey(User, on_delete=models.CASCADE, related_name='teacher_overrides')
+    student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_overrides')
+    atom = models.ForeignKey(TeachingAtom, on_delete=models.CASCADE, related_name='overrides', null=True, blank=True)
+    concept = models.ForeignKey(Concept, on_delete=models.CASCADE, related_name='overrides', null=True, blank=True)
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    parameters = models.JSONField(default=dict, help_text='Action parameters (e.g., mastery value)')
+    reason = models.TextField(blank=True, help_text='Why the teacher is intervening')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'teacher_override'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Override: {self.teacher.username} â†’ {self.student.username} ({self.action})"
+
+
+class TeacherGoal(models.Model):
+    """Goals/deadlines set by teachers for students"""
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('overdue', 'Overdue'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    teacher = models.ForeignKey(User, on_delete=models.CASCADE, related_name='set_goals')
+    student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assigned_goals', null=True, blank=True)
+    concept = models.ForeignKey(Concept, on_delete=models.CASCADE, related_name='goals', null=True, blank=True)
+    title = models.CharField(max_length=300)
+    description = models.TextField(blank=True)
+    deadline = models.DateTimeField(null=True, blank=True)
+    target_mastery = models.FloatField(default=0.8)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    is_class_wide = models.BooleanField(default=False, help_text='If true, applies to all students')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'teacher_goal'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        target = 'All Students' if self.is_class_wide else self.student.username if self.student else 'N/A'
+        return f"Goal: {self.title} â†’ {target}"
+
+
+# ==================== AI STUDY PLANNER ====================
+
+class StudyPlanner(models.Model):
+    GOAL_CHOICES = [
+        ('study', 'Regular Study'),
+        ('exam', 'Exam Preparation'),
+        ('other', 'Other'),
+    ]
+
+    DAY_OPTION_CHOICES = [
+        ('mon_fri', 'Monday to Friday'),
+        ('mon_sun', 'Monday to Sunday'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='study_planners')
+    goal_type = models.CharField(max_length=20, choices=GOAL_CHOICES)
+    day_option = models.CharField(max_length=20, choices=DAY_OPTION_CHOICES)
+    free_hours_per_day = models.IntegerField(default=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # Store generated timetable
+    timetable = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class PlannerSubject(models.Model):
+    planner = models.ForeignKey(StudyPlanner, on_delete=models.CASCADE, related_name='subjects')
+    subject_name = models.CharField(max_length=200)
+    priority = models.IntegerField(default=1)  # 1 = high, 2 = medium, 3 = low
+
+class StudyPlanItem(models.Model):
+    planner = models.ForeignKey(
+        StudyPlanner,
+        on_delete=models.CASCADE,
+        related_name="items"
+    )
+
+    date = models.DateField()
+    subject = models.CharField(max_length=255)
+    topic = models.CharField(max_length=255)
+    hours = models.FloatField(default=1)
+
+    completed = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.date} - {self.subject} - {self.topic}"
+
+
+================================================
+FILE: accounts/planner_engine.py
+================================================
+import random
+from collections import defaultdict
+
+DAYS_MON_FRI = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+DAYS_MON_SUN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def generate_timetable(planner):
+    if planner.day_option == "mon_fri":
+        days = DAYS_MON_FRI
+    else:
+        days = DAYS_MON_SUN
+
+    subjects = list(planner.subjects.all())
+    subjects_sorted = sorted(subjects, key=lambda x: x.priority)
+
+    timetable = defaultdict(list)
+
+    subject_cycle = []
+
+    for subject in subjects_sorted:
+        subject_cycle.extend([subject.subject_name] * (4 - subject.priority))
+
+    if not subject_cycle:
+        return {}
+
+    index = 0
+
+    for day in days:
+        for hour in range(planner.free_hours_per_day):
+            subject_name = subject_cycle[index % len(subject_cycle)]
+            timetable[day].append({
+                "hour": hour + 1,
+                "subject": subject_name,
+                "status": "pending"
+            })
+            index += 1
+
+    return dict(timetable)
+
+
+================================================
+FILE: accounts/serializers.py
+================================================
+from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
+
+class RegisterSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(
+        required=True,
+        validators=[UniqueValidator(queryset=User.objects.all())]
+    )
+    password = serializers.CharField(
+        write_only=True, 
+        required=True, 
+        validators=[validate_password]
+    )
+    password2 = serializers.CharField(write_only=True, required=True)
+
+    class Meta:
+        model = User
+        fields = ('username', 'password', 'password2', 'email', 'first_name', 'last_name')
+        extra_kwargs = {
+            'first_name': {'required': True},
+            'last_name': {'required': True}
+        }
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password2']:
+            raise serializers.ValidationError(
+                {"password": "Password fields didn't match."}
+            )
+        return attrs
+
+    def create(self, validated_data):
+        user = User.objects.create(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name']
+        )
+        user.set_password(validated_data['password'])
+        user.save()
+        
+        # Create learning profile for the user
+        from .models import LearningProfile
+        LearningProfile.objects.create(user=user)
+        
+        return user
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ('id', 'username', 'email', 'first_name', 'last_name')
+        
+        
+        
+from .models import (
+    LearningProfile, Concept, TeachingAtom, 
+    Question, StudentProgress, LearningSession,
+    TeacherProfile, TeacherContent, QuestionApproval,
+    TeacherOverride, TeacherGoal
+)
+
+class ConceptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Concept
+        fields = ['id', 'name', 'subject', 'description', 'difficulty', 'order']
+
+class TeachingAtomSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeachingAtom
+        fields = ['id', 'name', 'explanation', 'analogy', 'examples', 'order']
+
+class QuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Question
+        fields = ['id', 'difficulty', 'cognitive_operation', 'estimated_time', 
+                 'question_text', 'options', 'correct_index']
+
+class StudentProgressSerializer(serializers.ModelSerializer):
+    atom_name = serializers.CharField(source='atom.name', read_only=True)
+    atom_id = serializers.IntegerField(source='atom.id', read_only=True)
+    concept_name = serializers.CharField(source='atom.concept.name', read_only=True)
+    concept_id = serializers.IntegerField(source='atom.concept.id', read_only=True)
+    subject = serializers.CharField(source='atom.concept.subject', read_only=True)
+    
+    class Meta:
+        model = StudentProgress
+        fields = ['id', 'atom_id', 'atom_name', 'concept_id', 'concept_name', 'subject',
+                 'mastery_score', 'phase', 'streak', 'hint_usage', 'retention_verified']
+
+class LearningSessionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LearningSession
+        fields = ['id', 'concept', 'start_time', 'end_time', 'questions_answered',
+                 'correct_answers', 'hints_used']
+
+
+# ==================== TEACHER SERIALIZERS ====================
+
+class TeacherProfileSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+
+    class Meta:
+        model = TeacherProfile
+        fields = ['id', 'username', 'email', 'first_name', 'last_name',
+                  'subject', 'bio', 'is_active', 'created_at']
+
+
+class TeacherRegisterSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    password2 = serializers.CharField(write_only=True)
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    subject = serializers.CharField(max_length=200, required=False, default='')
+    bio = serializers.CharField(required=False, default='')
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password2']:
+            raise serializers.ValidationError({"password": "Passwords don't match."})
+        from django.contrib.auth.models import User
+        if User.objects.filter(username=attrs['username']).exists():
+            raise serializers.ValidationError({"username": "Username already exists."})
+        if User.objects.filter(email=attrs['email']).exists():
+            raise serializers.ValidationError({"email": "Email already exists."})
+        return attrs
+
+    def create(self, validated_data):
+        from django.contrib.auth.models import User
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name'],
+            is_staff=True,  # Teachers get staff status
+        )
+        TeacherProfile.objects.create(
+            user=user,
+            subject=validated_data.get('subject', ''),
+            bio=validated_data.get('bio', ''),
+        )
+        return user
+
+
+class TeacherContentSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.CharField(source='teacher.get_full_name', read_only=True)
+    atom_name = serializers.CharField(source='atom.name', read_only=True)
+    concept_name = serializers.CharField(source='atom.concept.name', read_only=True)
+
+    class Meta:
+        model = TeacherContent
+        fields = ['id', 'teacher', 'teacher_name', 'atom', 'atom_name', 'concept_name',
+                  'explanation', 'analogy', 'examples', 'tips', 'status', 'priority',
+                  'created_at', 'updated_at']
+        read_only_fields = ['teacher', 'created_at', 'updated_at']
+
+
+class QuestionApprovalSerializer(serializers.ModelSerializer):
+    question_text = serializers.CharField(source='question.question_text', read_only=True)
+    question_options = serializers.JSONField(source='question.options', read_only=True)
+    question_correct_index = serializers.IntegerField(source='question.correct_index', read_only=True)
+    question_difficulty = serializers.CharField(source='question.difficulty', read_only=True)
+    atom_name = serializers.CharField(source='question.atom.name', read_only=True)
+    concept_name = serializers.CharField(source='question.atom.concept.name', read_only=True)
+
+    class Meta:
+        model = QuestionApproval
+        fields = ['id', 'question', 'question_text', 'question_options', 'question_correct_index',
+                  'question_difficulty', 'atom_name', 'concept_name', 'teacher', 'status',
+                  'feedback', 'edited_question_text', 'edited_options', 'edited_correct_index',
+                  'reviewed_at', 'created_at']
+        read_only_fields = ['teacher', 'created_at', 'reviewed_at']
+
+
+class TeacherOverrideSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.CharField(source='teacher.get_full_name', read_only=True)
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_username = serializers.CharField(source='student.username', read_only=True)
+    atom_name = serializers.CharField(source='atom.name', read_only=True, default=None)
+    concept_name = serializers.CharField(source='concept.name', read_only=True, default=None)
+
+    class Meta:
+        model = TeacherOverride
+        fields = ['id', 'teacher', 'teacher_name', 'student', 'student_name', 'student_username',
+                  'atom', 'atom_name', 'concept', 'concept_name', 'action', 'parameters',
+                  'reason', 'is_active', 'created_at']
+        read_only_fields = ['teacher', 'created_at']
+
+
+class TeacherGoalSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.CharField(source='teacher.get_full_name', read_only=True)
+    student_name = serializers.SerializerMethodField()
+    concept_name = serializers.CharField(source='concept.name', read_only=True, default=None)
+
+    class Meta:
+        model = TeacherGoal
+        fields = ['id', 'teacher', 'teacher_name', 'student', 'student_name',
+                  'concept', 'concept_name', 'title', 'description', 'deadline',
+                  'target_mastery', 'status', 'is_class_wide', 'created_at']
+        read_only_fields = ['teacher', 'created_at']
+
+    def get_student_name(self, obj):
+        if obj.is_class_wide:
+            return 'All Students'
+        return obj.student.get_full_name() if obj.student else None
+
+
+class StudentDetailSerializer(serializers.ModelSerializer):
+    """Detailed student info for teacher dashboard"""
+    progress = serializers.SerializerMethodField()
+    total_xp = serializers.SerializerMethodField()
+    weak_areas = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'email',
+                  'progress', 'total_xp', 'weak_areas']
+
+    def get_progress(self, obj):
+        progresses = StudentProgress.objects.filter(user=obj).select_related('atom__concept')
+        return StudentProgressSerializer(progresses, many=True).data
+
+    def get_total_xp(self, obj):
+        try:
+            return obj.xp_profile.total_xp
+        except Exception:
+            return 0
+
+    def get_weak_areas(self, obj):
+        weak = StudentProgress.objects.filter(
+            user=obj, mastery_score__lt=0.5
+        ).select_related('atom__concept').order_by('mastery_score')[:10]
+        return [{
+            'atom_id': p.atom.id,
+            'atom_name': p.atom.name,
+            'concept_name': p.atom.concept.name,
+            'mastery_score': p.mastery_score,
+            'phase': p.phase,
+        } for p in weak]
+
+
+================================================
+FILE: accounts/tests.py
+================================================
+from django.test import TestCase
+
+# Create your tests here.
+
+
+
+================================================
+FILE: accounts/urls.py
+================================================
+from django.urls import path
+from .views import (
+    # Auth views
+    AIDoubtAssistantView, GetConceptResourcesView, RegisterView, LoginView, DashboardView,
+    
+    # Concept management
+    ConceptListView, GenerateConceptView,
+    
+    # Teaching-first flow views
+    StartTeachingSessionView, GetTeachingContentView,
+    GenerateQuestionsFromTeachingView, SubmitAtomAnswerView,
+    CompleteAtomView, GetLearningProgressView,
+    GenerateInitialQuizView, SubmitInitialQuizAnswerView, CompleteInitialQuizView,
+    GenerateFinalChallengeView, CompleteFinalChallengeView,
+
+    # Adaptive flow views
+    GenerateConceptOverviewView, GenerateAtomSummaryView,
+    AdaptiveReteachView, GetAllAtomsMasteryView,
+
+    # Enhanced pacing engine views
+    GetVelocityGraphView, GetFatigueStatusView, RecordBreakView,
+    RetentionCheckView, RecordHintUsageView,
+
+    # Leaderboard views
+    LeaderboardView, MyXPView,
+
+    # Concept final challenge views
+    GenerateConceptFinalChallengeView, SubmitConceptFinalAnswerView,
+    CompleteConceptFinalChallengeView,
+
+    # Teacher views
+    TeacherRegisterView, TeacherLoginView, TeacherDashboardView,
+    TeacherStudentListView, TeacherStudentDetailView,
+    TeacherContentListView, TeacherContentDetailView,
+    TeacherQuestionListView, TeacherQuestionApproveView, TeacherAddQuestionView,
+    TeacherOverrideListView, TeacherOverrideDeactivateView,
+    TeacherGoalListView, TeacherGoalUpdateView,
+    TeacherClassAnalyticsView,
+    TeacherConceptManageView, TeacherAtomManageView,
+    CheckTeacherView,
+
+    # AI planner views 
+    CreateStudyPlannerView , GetMyPlannerView, TodayStudyView
+)
+
+urlpatterns = [
+    # Auth endpoints
+    path('api/register/', RegisterView.as_view(), name='register'),
+    path('api/login/', LoginView.as_view(), name='login'),
+    path('api/dashboard/', DashboardView.as_view(), name='dashboard'),
+    
+    # Concept management
+    path('api/concepts/', ConceptListView.as_view(), name='concepts'),
+    path('api/generate-concept/', GenerateConceptView.as_view(), name='generate_concept'),
+    
+    # Teaching-first flow endpoints
+    path('api/start-teaching-session/', StartTeachingSessionView.as_view(), name='start_teaching_session'),
+    path('api/initial-quiz/', GenerateInitialQuizView.as_view(), name='generate_initial_quiz'),
+    path('api/submit-initial-quiz-answer/', SubmitInitialQuizAnswerView.as_view(), name='submit_initial_quiz_answer'),
+    path('api/complete-initial-quiz/', CompleteInitialQuizView.as_view(), name='complete_initial_quiz'),
+    path('api/teaching-content/', GetTeachingContentView.as_view(), name='teaching_content'),
+    path('api/generate-questions-from-teaching/', GenerateQuestionsFromTeachingView.as_view(), name='generate_questions_from_teaching'),
+    path('api/submit-atom-answer/', SubmitAtomAnswerView.as_view(), name='submit_atom_answer'),
+    path('api/complete-atom/', CompleteAtomView.as_view(), name='complete_atom'),
+    path('api/final-challenge/', GenerateFinalChallengeView.as_view(), name='generate_final_challenge'),
+    path('api/complete-final-challenge/', CompleteFinalChallengeView.as_view(), name='complete_final_challenge'),
+    
+    # Adaptive flow endpoints
+    path('api/concept-overview/', GenerateConceptOverviewView.as_view(), name='concept_overview'),
+    path('api/atom-summary/', GenerateAtomSummaryView.as_view(), name='atom_summary'),
+    path('api/adaptive-reteach/', AdaptiveReteachView.as_view(), name='adaptive_reteach'),
+    path('api/all-atoms-mastery/', GetAllAtomsMasteryView.as_view(), name='all_atoms_mastery'),
+
+    # Progress
+    path('api/progress/', GetLearningProgressView.as_view(), name='learning_progress'),
+    
+    path('api/concept-resources/', GetConceptResourcesView.as_view(), name='concept_resources'),
+
+    # Enhanced pacing engine endpoints
+    path('api/velocity-graph/', GetVelocityGraphView.as_view(), name='velocity_graph'),
+    path('api/fatigue-status/', GetFatigueStatusView.as_view(), name='fatigue_status'),
+    path('api/record-break/', RecordBreakView.as_view(), name='record_break'),
+    path('api/retention-check/', RetentionCheckView.as_view(), name='retention_check'),
+    path('api/record-hint/', RecordHintUsageView.as_view(), name='record_hint'),
+
+    # Leaderboard endpoints
+    path('api/leaderboard/', LeaderboardView.as_view(), name='leaderboard'),
+    path('api/my-xp/', MyXPView.as_view(), name='my_xp'),
+
+    # Concept final challenge endpoints
+    path('api/concept-final-challenge/', GenerateConceptFinalChallengeView.as_view(), name='generate_concept_final_challenge'),
+    path('api/submit-concept-final-answer/', SubmitConceptFinalAnswerView.as_view(), name='submit_concept_final_answer'),
+    path('api/complete-concept-final-challenge/', CompleteConceptFinalChallengeView.as_view(), name='complete_concept_final_challenge'),
+    path("ai-assistant/", AIDoubtAssistantView.as_view(), name="ai_assistant"),
+
+    # ==================== TEACHER ENDPOINTS ====================
+    path('api/teacher/register/', TeacherRegisterView.as_view(), name='teacher_register'),
+    path('api/teacher/login/', TeacherLoginView.as_view(), name='teacher_login'),
+    path('api/teacher/dashboard/', TeacherDashboardView.as_view(), name='teacher_dashboard'),
+    path('api/teacher/check/', CheckTeacherView.as_view(), name='check_teacher'),
+
+    # Student analytics
+    path('api/teacher/students/', TeacherStudentListView.as_view(), name='teacher_students'),
+    path('api/teacher/student-detail/', TeacherStudentDetailView.as_view(), name='teacher_student_detail'),
+
+    # Content management
+    path('api/teacher/content/', TeacherContentListView.as_view(), name='teacher_content'),
+    path('api/teacher/content-detail/', TeacherContentDetailView.as_view(), name='teacher_content_detail'),
+
+    # Question management
+    path('api/teacher/questions/', TeacherQuestionListView.as_view(), name='teacher_questions'),
+    path('api/teacher/question-approve/', TeacherQuestionApproveView.as_view(), name='teacher_question_approve'),
+    path('api/teacher/question-add/', TeacherAddQuestionView.as_view(), name='teacher_add_question'),
+
+    # Student intervention
+    path('api/teacher/overrides/', TeacherOverrideListView.as_view(), name='teacher_overrides'),
+    path('api/teacher/override-deactivate/', TeacherOverrideDeactivateView.as_view(), name='teacher_override_deactivate'),
+
+    # Goals & deadlines
+    path('api/teacher/goals/', TeacherGoalListView.as_view(), name='teacher_goals'),
+    path('api/teacher/goal-update/', TeacherGoalUpdateView.as_view(), name='teacher_goal_update'),
+
+    # Class analytics
+    path('api/teacher/class-analytics/', TeacherClassAnalyticsView.as_view(), name='teacher_class_analytics'),
+
+    # Knowledge graph management
+    path('api/teacher/concepts/', TeacherConceptManageView.as_view(), name='teacher_concepts'),
+    path('api/teacher/atoms/', TeacherAtomManageView.as_view(), name='teacher_atoms'),
+
+    # AI planner 
+    path('create-planner/', CreateStudyPlannerView.as_view(), name='create_planner'),
+    path('my-planner/', GetMyPlannerView.as_view(), name='my_planner'),
+    path("today-study/", TodayStudyView.as_view(), name="today_study"),
+
+]
+
+
+================================================
+FILE: accounts/views.py
+================================================
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 49111: character maps to <undefined>
+
+
+================================================
+FILE: accounts/migrations/0001_initial.py
+================================================
+# Generated by Django 6.0.2 on 2026-02-16 10:28
+
+import django.db.models.deletion
+from django.conf import settings
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    initial = True
+
+    dependencies = [
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name='Concept',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('name', models.CharField(max_length=200)),
+                ('subject', models.CharField(max_length=100)),
+                ('description', models.TextField(blank=True)),
+                ('difficulty', models.CharField(choices=[('easy', 'Easy'), ('medium', 'Medium'), ('hard', 'Hard')], default='medium', max_length=10)),
+                ('order', models.IntegerField(default=0)),
+                ('prerequisites', models.ManyToManyField(blank=True, to='accounts.concept')),
+            ],
+            options={
+                'ordering': ['subject', 'order'],
+                'unique_together': {('name', 'subject')},
+            },
+        ),
+        migrations.CreateModel(
+            name='LearningProfile',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('overall_theta', models.FloatField(default=0.0)),
+                ('current_subject', models.CharField(blank=True, max_length=100)),
+                ('current_concept', models.CharField(blank=True, max_length=100)),
+                ('learning_streak', models.IntegerField(default=0)),
+                ('total_time_spent', models.IntegerField(default=0)),
+                ('last_active', models.DateTimeField(auto_now=True)),
+                ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='learning_profile', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'db_table': 'learning_profile',
+            },
+        ),
+        migrations.CreateModel(
+            name='LearningSession',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('start_time', models.DateTimeField(auto_now_add=True)),
+                ('end_time', models.DateTimeField(blank=True, null=True)),
+                ('questions_answered', models.IntegerField(default=0)),
+                ('correct_answers', models.IntegerField(default=0)),
+                ('hints_used', models.IntegerField(default=0)),
+                ('session_data', models.JSONField(default=dict)),
+                ('concept', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='accounts.concept')),
+                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='learning_sessions', to=settings.AUTH_USER_MODEL)),
+            ],
+        ),
+        migrations.CreateModel(
+            name='TeachingAtom',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('name', models.CharField(max_length=200)),
+                ('explanation', models.TextField(blank=True)),
+                ('analogy', models.TextField(blank=True)),
+                ('examples', models.JSONField(default=list)),
+                ('order', models.IntegerField(default=0)),
+                ('concept', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='atoms', to='accounts.concept')),
+            ],
+            options={
+                'ordering': ['concept', 'order'],
+            },
+        ),
+        migrations.CreateModel(
+            name='Question',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('difficulty', models.CharField(choices=[('easy', 'Easy'), ('medium', 'Medium'), ('hard', 'Hard')], max_length=10)),
+                ('cognitive_operation', models.CharField(choices=[('recall', 'Recall'), ('apply', 'Apply'), ('analyze', 'Analyze')], max_length=10)),
+                ('estimated_time', models.IntegerField(default=60)),
+                ('question_text', models.TextField()),
+                ('options', models.JSONField(default=list)),
+                ('correct_index', models.IntegerField()),
+                ('atom', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='questions', to='accounts.teachingatom')),
+            ],
+        ),
+        migrations.CreateModel(
+            name='StudentProgress',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('mastery_score', models.FloatField(default=0.3)),
+                ('phase', models.CharField(choices=[('diagnostic', 'Diagnostic'), ('teaching', 'Teaching'), ('practice', 'Practice'), ('reinforcement', 'Reinforcement'), ('mastery_check', 'Mastery Check'), ('complete', 'Complete')], default='diagnostic', max_length=20)),
+                ('streak', models.IntegerField(default=0)),
+                ('hint_usage', models.IntegerField(default=0)),
+                ('error_history', models.JSONField(default=list)),
+                ('retention_verified', models.BooleanField(default=False)),
+                ('last_practiced', models.DateTimeField(auto_now=True)),
+                ('times_practiced', models.IntegerField(default=0)),
+                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='progress', to=settings.AUTH_USER_MODEL)),
+                ('atom', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='accounts.teachingatom')),
+            ],
+            options={
+                'unique_together': {('user', 'atom')},
+            },
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/0002_concept_created_by.py
+================================================
+# Generated by GitHub Copilot on 2026-02-17
+
+from django.conf import settings
+from django.db import migrations, models
+import django.db.models.deletion
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('accounts', '0001_initial'),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name='concept',
+            name='created_by',
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name='created_concepts',
+                to=settings.AUTH_USER_MODEL,
+            ),
+        ),
+        migrations.AlterUniqueTogether(
+            name='concept',
+            unique_together={('name', 'subject', 'created_by')},
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/0003_learningsession_knowledge_level_and_more.py
+================================================
+# Generated by Django 6.0.2 on 2026-02-17 12:58
+
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('accounts', '0002_concept_created_by'),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name='learningsession',
+            name='knowledge_level',
+            field=models.CharField(choices=[('zero', 'Zero Knowledge'), ('beginner', 'Beginner'), ('intermediate', 'Intermediate'), ('advanced', 'Advanced')], default='zero', max_length=20),
+        ),
+        migrations.AddField(
+            model_name='learningsession',
+            name='user_feedback',
+            field=models.JSONField(default=dict),
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/0004_add_error_history_default.py
+================================================
+# In accounts/migrations/0004_add_error_history_default.py
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    dependencies = [
+        ('accounts', '0003_learningsession_knowledge_level_and_more'),
+    ]
+
+    operations = [
+        migrations.AlterField(
+            model_name='studentprogress',
+            name='error_history',
+            field=models.JSONField(default=list),
+        ),
+    ]
+
+
+================================================
+FILE: accounts/migrations/0005_learningsession_break_count_and_more.py
+================================================
+# Generated by Django 6.0.2 on 2026-02-19 14:37
+
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('accounts', '0004_add_error_history_default'),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name='learningsession',
+            name='break_count',
+            field=models.IntegerField(default=0),
+        ),
+        migrations.AddField(
+            model_name='learningsession',
+            name='consecutive_skips',
+            field=models.IntegerField(default=0),
+        ),
+        migrations.AddField(
+            model_name='learningsession',
+            name='engagement_score',
+            field=models.FloatField(default=0.7),
+        ),
+        migrations.AddField(
+            model_name='learningsession',
+            name='fatigue_level',
+            field=models.CharField(default='fresh', max_length=20),
+        ),
+        migrations.AddField(
+            model_name='learningsession',
+            name='last_break_at',
+            field=models.DateTimeField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='learningsession',
+            name='velocity_data',
+            field=models.JSONField(blank=True, default=list),
+        ),
+        migrations.AddField(
+            model_name='studentprogress',
+            name='next_review_at',
+            field=models.DateTimeField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='studentprogress',
+            name='retention_checks_failed',
+            field=models.IntegerField(default=0),
+        ),
+        migrations.AddField(
+            model_name='studentprogress',
+            name='retention_checks_passed',
+            field=models.IntegerField(default=0),
+        ),
+        migrations.AddField(
+            model_name='studentprogress',
+            name='retention_score',
+            field=models.FloatField(default=1.0),
+        ),
+        migrations.AddField(
+            model_name='studentprogress',
+            name='time_per_question',
+            field=models.JSONField(blank=True, default=list),
+        ),
+        migrations.AddField(
+            model_name='studentprogress',
+            name='velocity_snapshots',
+            field=models.JSONField(blank=True, default=list),
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/0006_userxp.py
+================================================
+# Generated by Django 6.0.2 on 2026-02-19 16:04
+
+import django.db.models.deletion
+from django.conf import settings
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('accounts', '0005_learningsession_break_count_and_more'),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name='UserXP',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('total_xp', models.IntegerField(default=0)),
+                ('questions_xp', models.IntegerField(default=0)),
+                ('atoms_xp', models.IntegerField(default=0)),
+                ('concepts_xp', models.IntegerField(default=0)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='xp_profile', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'db_table': 'user_xp',
+                'ordering': ['-total_xp'],
+            },
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/0007_questionapproval_teachergoal_teacheroverride_and_more.py
+================================================
+# Generated by Django 6.0.2 on 2026-02-20 14:11
+
+import django.db.models.deletion
+from django.conf import settings
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('accounts', '0006_userxp'),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name='QuestionApproval',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('status', models.CharField(choices=[('pending', 'Pending Review'), ('approved', 'Approved'), ('rejected', 'Rejected'), ('edited', 'Edited & Approved'), ('disabled', 'Disabled')], default='pending', max_length=20)),
+                ('feedback', models.TextField(blank=True, help_text='Teacher feedback on the question')),
+                ('edited_question_text', models.TextField(blank=True)),
+                ('edited_options', models.JSONField(blank=True, default=list)),
+                ('edited_correct_index', models.IntegerField(blank=True, null=True)),
+                ('reviewed_at', models.DateTimeField(blank=True, null=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('question', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='approval', to='accounts.question')),
+                ('teacher', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='question_approvals', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'db_table': 'question_approval',
+                'ordering': ['-created_at'],
+            },
+        ),
+        migrations.CreateModel(
+            name='TeacherGoal',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('title', models.CharField(max_length=300)),
+                ('description', models.TextField(blank=True)),
+                ('deadline', models.DateTimeField(blank=True, null=True)),
+                ('target_mastery', models.FloatField(default=0.8)),
+                ('status', models.CharField(choices=[('active', 'Active'), ('completed', 'Completed'), ('overdue', 'Overdue'), ('cancelled', 'Cancelled')], default='active', max_length=20)),
+                ('is_class_wide', models.BooleanField(default=False, help_text='If true, applies to all students')),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('concept', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='goals', to='accounts.concept')),
+                ('student', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='assigned_goals', to=settings.AUTH_USER_MODEL)),
+                ('teacher', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='set_goals', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'db_table': 'teacher_goal',
+                'ordering': ['-created_at'],
+            },
+        ),
+        migrations.CreateModel(
+            name='TeacherOverride',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('action', models.CharField(choices=[('reset_mastery', 'Reset Mastery'), ('assign_atom', 'Assign Specific Atom'), ('force_review', 'Force Review'), ('set_mastery', 'Set Mastery Level'), ('assign_remedial', 'Assign Remedial Content'), ('skip_atom', 'Skip Atom')], max_length=30)),
+                ('parameters', models.JSONField(default=dict, help_text='Action parameters (e.g., mastery value)')),
+                ('reason', models.TextField(blank=True, help_text='Why the teacher is intervening')),
+                ('is_active', models.BooleanField(default=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('atom', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='overrides', to='accounts.teachingatom')),
+                ('concept', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='overrides', to='accounts.concept')),
+                ('student', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='received_overrides', to=settings.AUTH_USER_MODEL)),
+                ('teacher', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='teacher_overrides', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'db_table': 'teacher_override',
+                'ordering': ['-created_at'],
+            },
+        ),
+        migrations.CreateModel(
+            name='TeacherProfile',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('subject', models.CharField(blank=True, max_length=200)),
+                ('bio', models.TextField(blank=True)),
+                ('is_active', models.BooleanField(default=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='teacher_profile', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'db_table': 'teacher_profile',
+            },
+        ),
+        migrations.CreateModel(
+            name='TeacherContent',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('explanation', models.TextField(blank=True, help_text='Custom explanation for the atom')),
+                ('analogy', models.TextField(blank=True, help_text='Custom analogy')),
+                ('examples', models.JSONField(default=list, help_text='Custom examples')),
+                ('tips', models.TextField(blank=True, help_text='Teaching tips for students')),
+                ('status', models.CharField(choices=[('draft', 'Draft'), ('published', 'Published'), ('archived', 'Archived')], default='published', max_length=20)),
+                ('priority', models.BooleanField(default=True, help_text='If true, shown before AI content')),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('atom', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='teacher_contents', to='accounts.teachingatom')),
+                ('teacher', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='teacher_contents', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'db_table': 'teacher_content',
+                'ordering': ['-priority', '-updated_at'],
+                'unique_together': {('teacher', 'atom')},
+            },
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/0008_alter_teacherprofile_is_active.py
+================================================
+# Generated by Django 6.0.2 on 2026-02-20 15:00
+
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('accounts', '0007_questionapproval_teachergoal_teacheroverride_and_more'),
+    ]
+
+    operations = [
+        migrations.AlterField(
+            model_name='teacherprofile',
+            name='is_active',
+            field=models.BooleanField(default=False),
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/0009_studyplanner_plannersubject.py
+================================================
+# Generated by Django 6.0.2 on 2026-02-21 15:06
+
+import django.db.models.deletion
+from django.conf import settings
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('accounts', '0008_alter_teacherprofile_is_active'),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name='StudyPlanner',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('goal_type', models.CharField(choices=[('study', 'Regular Study'), ('exam', 'Exam Preparation'), ('other', 'Other')], max_length=20)),
+                ('day_option', models.CharField(choices=[('mon_fri', 'Monday to Friday'), ('mon_sun', 'Monday to Sunday')], max_length=20)),
+                ('free_hours_per_day', models.IntegerField(default=2)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('timetable', models.JSONField(default=dict)),
+                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='study_planners', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'ordering': ['-created_at'],
+            },
+        ),
+        migrations.CreateModel(
+            name='PlannerSubject',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('subject_name', models.CharField(max_length=200)),
+                ('priority', models.IntegerField(default=1)),
+                ('planner', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='subjects', to='accounts.studyplanner')),
+            ],
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/0010_studyplanitem.py
+================================================
+# Generated by Django 6.0.2 on 2026-02-21 18:06
+
+import django.db.models.deletion
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('accounts', '0009_studyplanner_plannersubject'),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name='StudyPlanItem',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('date', models.DateField()),
+                ('subject', models.CharField(max_length=255)),
+                ('topic', models.CharField(max_length=255)),
+                ('hours', models.FloatField(default=1)),
+                ('completed', models.BooleanField(default=False)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('planner', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='items', to='accounts.studyplanner')),
+            ],
+        ),
+    ]
+
+
+
+================================================
+FILE: accounts/migrations/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: core/__init__.py
+================================================
+import os
+import sys
+
+# Add the backend directory to path
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
+
+
+================================================
+FILE: core/asgi.py
+================================================
+"""
+ASGI config for core project.
+
+It exposes the ASGI callable as a module-level variable named ``application``.
+
+For more information on this file, see
+https://docs.djangoproject.com/en/6.0/howto/deployment/asgi/
+"""
+
+import os
+
+from django.core.asgi import get_asgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
+
+application = get_asgi_application()
+
+
+
+================================================
+FILE: core/settings.py
+================================================
+import os
+from datetime import timedelta
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+# Quick-start development settings - unsuitable for production
+# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = 'django-insecure-gq5gu@@4-^r(35**5w-v6l-qkkr@aut890$z=lx^e_%1$q+nb%'
+
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = True
+
+ALLOWED_HOSTS = ["*"]
+
+
+# Application definition
+
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    
+    # Third party apps
+    'rest_framework',
+    'rest_framework_simplejwt',
+    'corsheaders',
+    
+    # Local apps
+    'accounts',
+    'learning_engine',
+
+]
+
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # Add this
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+
+ROOT_URLCONF = 'core.urls'
+
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [],
+        'APP_DIRS': True,
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.debug',
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = 'core.wsgi.application'
+
+
+# Database
+# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+
+
+# Password validation
+# https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
+
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
+
+
+# Internationalization
+# https://docs.djangoproject.com/en/6.0/topics/i18n/
+
+LANGUAGE_CODE = 'en-us'
+
+TIME_ZONE = 'UTC'
+
+USE_I18N = True
+
+USE_TZ = True
+
+
+# Static files (CSS, JavaScript, Images)
+# https://docs.djangoproject.com/en/6.0/howto/static-files/
+
+STATIC_URL = 'static/'
+
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# CORS settings
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+]
+
+CORS_ALLOW_CREDENTIALS = True
+
+# REST Framework settings
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+}
+
+# JWT settings
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': False,
+
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+
+    'JTI_CLAIM': 'jti',
+
+    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
+    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=5),
+    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
+}
+
+
+LEARNING_ENGINE = {
+    'MAX_PER_DIFFICULTY': 4,
+    'MASTERY_THRESHOLD': 0.7,
+    'BKT_SLIP': 0.1,
+    'BKT_GUESS': 0.2,
+    'BKT_LEARN': 0.15,
+}
+
+# API Keys (set these in environment variables)
+# GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY',  '')
+
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '')
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
+
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {asctime} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(BASE_DIR, 'debug.log'),
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console', 'file'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'accounts': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'learning_engine': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+    },
+}
+
+
+================================================
+FILE: core/urls.py
+================================================
+from django.contrib import admin
+from django.urls import path, include
+from rest_framework_simplejwt.views import TokenRefreshView
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('auth/', include('accounts.urls')),  # This should be correct
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+]
+
+
+================================================
+FILE: core/wsgi.py
+================================================
+"""
+WSGI config for core project.
+
+It exposes the WSGI callable as a module-level variable named ``application``.
+
+For more information on this file, see
+https://docs.djangoproject.com/en/6.0/howto/deployment/wsgi/
+"""
+
+import os
+
+from django.core.wsgi import get_wsgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
+
+application = get_wsgi_application()
+
+
+
+================================================
+FILE: learning_engine/__init__.py
+================================================
+from .adaptive_flow import AdaptiveLearningEngine
+from .knowledge_tracing import bkt_update, irt_probability, update_theta, classify_behavior, update_mastery_from_behavior, classify_error_type
+from .question_generator import QuestionGenerator
+from .models import TeachingAtomState, LearningPhase, ErrorType, PacingDecision
+
+__all__ = [
+    'AdaptiveLearningEngine',
+    'bkt_update',
+    'irt_probability',
+    'update_theta',
+    'classify_behavior',
+    'update_mastery_from_behavior',
+    'classify_error_type',
+    'QuestionGenerator',
+    'TeachingAtomState',
+    'LearningPhase',
+    'ErrorType',
+    'PacingDecision',
+]
+
+
+================================================
+FILE: learning_engine/adaptive_flow.py
+================================================
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x9d in position 30232: character maps to <undefined>
+
+
+================================================
+FILE: learning_engine/ai_assistant.py
+================================================
+# learning_engine/ai_assistant.py
+
+import google.generativeai as genai
+from django.conf import settings
+
+
+# Configure Gemini
+genai.configure(api_key=settings.GOOGLE_API_KEY)
+
+model = genai.GenerativeModel("gemini-3-flash-preview")
+
+
+def generate_ai_response(question, topic, level, accuracy=None):
+    """
+    Core Learning Engine Logic
+    """
+
+    # Adaptive Level Based on Accuracy (Optional)
+    if accuracy is not None:
+        if accuracy < 50:
+            level = "Beginner"
+        elif accuracy < 80:
+            level = "Intermediate"
+        else:
+            level = "Advanced"
+
+    difficulty_instruction = {
+        "Beginner": "Explain in very simple language using real-life analogy.",
+        "Intermediate": "Explain clearly with one technical example.",
+        "Advanced": "Explain deeply with edge cases and complexity."
+    }
+
+    prompt = f"""
+    You are an adaptive AI tutor.
+
+    Student Level: {level}
+    Topic: {topic}
+
+    {difficulty_instruction.get(level)}
+
+    Question: {question}
+
+    Only answer if the question is related to academic syllabus.
+    Keep answer under 200 words.
+    """
+
+    response = model.generate_content(prompt)
+
+    return response.text
+
+
+================================================
+FILE: learning_engine/ai_study_planner.py
+================================================
+import google.generativeai as genai
+import os
+import json
+
+from datetime import date, timedelta
+
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+for m in genai.list_models():
+    print(m.name)
+
+model = genai.GenerativeModel("gemini-2.5-flash")
+
+
+def generate_subtopics(subject, goal):
+    prompt = f"""
+    Break the subject "{subject}" into 8-12 structured subtopics.
+    Goal: {goal}
+    Return JSON array only.
+    Example:
+    ["Topic1", "Topic2", "Topic3"]
+    """
+
+    response = model.generate_content(prompt)
+
+    try:
+        topics = json.loads(response.text)
+        return topics
+    except:
+        # fallback simple split if AI returns messy output
+        lines = response.text.split("\n")
+        cleaned = [l.replace("-", "").strip() for l in lines if l.strip()]
+        return cleaned[:10]
+    
+
+def distribute_topics(planner, subjects_with_topics):
+    today = date.today()
+
+    if planner.day_option == "mon_fri":
+        total_days = 5
+    else:
+        total_days = 7
+
+    schedule = []
+    current_date = today
+
+    for day_index in range(total_days):
+
+        for subject_data in subjects_with_topics:
+
+            topics = subject_data["topics"]
+
+            if day_index < len(topics):
+                schedule.append({
+                    "date": current_date,
+                    "subject": subject_data["subject_name"],
+                    "topic": topics[day_index],
+                    "hours": planner.free_hours_per_day / len(subjects_with_topics)
+                })
+
+        current_date += timedelta(days=1)
+
+    return schedule
+
+
+================================================
+FILE: learning_engine/external_resources.py
+================================================
+# backend/learning_engine/external_resources.py
+
+import os
+import requests
+from youtube_search import YoutubeSearch
+from serpapi import Client  # Changed import
+from django.conf import settings
+import logging
+import json
+
+logger = logging.getLogger(__name__)
+
+class ExternalResourceFetcher:
+    """Fetch external learning resources (images, videos) for concepts"""
+    
+    def __init__(self):
+        self.serpapi_key = getattr(settings, 'SERPAPI_KEY', os.getenv('SERPAPI_KEY', ''))
+        self.download_folder = os.path.join(settings.BASE_DIR, 'media', 'concept_images')
+        os.makedirs(self.download_folder, exist_ok=True)
+    
+    def get_youtube_videos(self, topic, max_results=3):
+        """
+        Search YouTube for videos related to the given topic
+        """
+        try:
+            # Enhance the search query for better educational content
+            search_query = f"{topic} tutorial explanation"
+            
+            # Try-except for youtube-search which might have issues
+            try:
+                results = YoutubeSearch(search_query, max_results=max_results).to_dict()
+            except Exception as e:
+                logger.error(f"YouTube search failed: {e}")
+                # Fallback: return empty list
+                return []
+            
+            videos = []
+            for result in results:
+                video = {
+                    'title': result.get('title', ''),
+                    'url': f"https://youtube.com{result.get('url_suffix', '')}",
+                    'channel': result.get('channel', ''),
+                    'duration': result.get('duration', ''),
+                    'thumbnail': result.get('thumbnails', [''])[0] if result.get('thumbnails') else '',
+                    'views': result.get('views', '')
+                }
+                videos.append(video)
+            return videos
+        except Exception as e:
+            logger.error(f"Error in get_youtube_videos: {e}")
+            return []
+    
+    def get_images(self, query, max_images=3):
+        """
+        Fetch relevant images/diagrams for a concept using SerpAPI
+        """
+        if not self.serpapi_key:
+            logger.warning("SERPAPI_KEY not set, skipping image fetch")
+            return self.get_fallback_images(query, max_images)
+        
+        try:
+            # Priority sites for educational content
+            priority_sites = [
+                "geeksforgeeks.org",
+                "medium.com",
+                "tutorialspoint.com",
+                "javatpoint.com",
+                "programiz.com",
+                "w3schools.com"
+            ]
+            
+            image_urls = []
+            
+            # First try to get images from priority sites
+            for site in priority_sites[:max_images]:
+                if len(image_urls) >= max_images:
+                    break
+                
+                try:
+                    # Using the Client approach for serpapi
+                    client = Client(api_key=self.serpapi_key)
+                    
+                    full_query = f"{query} diagram OR illustration site:{site}"
+                    
+                    # Create params for image search
+                    params = {
+                        "engine": "google_images",
+                        "q": full_query,
+                        "num": 1,
+                        "ijn": 0,
+                        "api_key": self.serpapi_key
+                    }
+                    
+                    # Make the request
+                    result = client.search(params)
+                    
+                    if hasattr(result, 'get') and result.get('images_results'):
+                        images = result['images_results']
+                        if images and len(images) > 0:
+                            image_urls.append({
+                                'url': images[0].get('original', ''),
+                                'title': images[0].get('title', ''),
+                                'source': site,
+                                'thumbnail': images[0].get('thumbnail', '')
+                            })
+                            logger.info(f"Found image from {site}")
+                except Exception as e:
+                    logger.error(f"Error fetching image from {site}: {e}")
+                    continue
+            
+            # If we still need more images, do a general search
+            if len(image_urls) < max_images:
+                try:
+                    client = Client(api_key=self.serpapi_key)
+                    params = {
+                        "engine": "google_images",
+                        "q": f"{query} educational diagram",
+                        "num": max_images - len(image_urls),
+                        "ijn": 0,
+                        "api_key": self.serpapi_key
+                    }
+                    
+                    result = client.search(params)
+                    
+                    if hasattr(result, 'get') and result.get('images_results'):
+                        images = result['images_results']
+                        for img in images:
+                            if len(image_urls) >= max_images:
+                                break
+                            image_urls.append({
+                                'url': img.get('original', ''),
+                                'title': img.get('title', ''),
+                                'source': img.get('source', ''),
+                                'thumbnail': img.get('thumbnail', '')
+                            })
+                except Exception as e:
+                    logger.error(f"Error in general image search: {e}")
+            
+            return image_urls
+            
+        except Exception as e:
+            logger.error(f"Error in get_images: {e}")
+            return self.get_fallback_images(query, max_images)
+    
+    def get_fallback_images(self, query, max_images=3):
+        """Provide fallback placeholder images when API fails"""
+        fallback_images = []
+        for i in range(min(max_images, 3)):
+            fallback_images.append({
+                'url': f'https://via.placeholder.com/600x400?text={query.replace(" ", "+")}+Diagram+{i+1}',
+                'title': f'{query} - Diagram {i+1}',
+                'source': 'placeholder',
+                'thumbnail': f'https://via.placeholder.com/300x200?text={query.replace(" ", "+")}+{i+1}'
+            })
+        return fallback_images
+    
+    def get_resources_for_concept(self, subject, concept, atom_name=None):
+        """
+        Get both videos and images for a concept
+        """
+        # Create search queries
+        if atom_name:
+            main_query = f"{subject} {concept} {atom_name}"
+            specific_query = f"{atom_name} in {concept}"
+        else:
+            main_query = f"{subject} {concept}"
+            specific_query = concept
+        
+        # Fetch resources with error handling
+        videos = []
+        images = []
+        
+        try:
+            videos = self.get_youtube_videos(main_query, max_results=2)
+        except Exception as e:
+            logger.error(f"Error fetching videos: {e}")
+        
+        try:
+            images = self.get_images(main_query, max_images=3)
+        except Exception as e:
+            logger.error(f"Error fetching images: {e}")
+        
+        # If no results, try more specific query
+        if not videos and not images:
+            try:
+                videos = self.get_youtube_videos(specific_query, max_results=2)
+                images = self.get_images(specific_query, max_images=3)
+            except Exception as e:
+                logger.error(f"Error in fallback search: {e}")
+        
+        return {
+            'videos': videos,
+            'images': images
+        }
+
+
+================================================
+FILE: learning_engine/knowledge_tracing.py
+================================================
+import math
+from typing import Dict, Any, Optional
+
+def bkt_update(p_know: float, correct: bool, p_slip: float = 0.1, 
+               p_guess: float = 0.2, p_learn: float = 0.15) -> float:
+    """
+    Bayesian Knowledge Tracing update
+    
+    Args:
+        p_know: Current probability student knows the skill
+        correct: Whether answer was correct
+        p_slip: Probability of slip (wrong despite knowing)
+        p_guess: Probability of guess (correct despite not knowing)
+        p_learn: Probability of learning after opportunity
+    
+    Returns:
+        Updated probability of knowledge
+    """
+    if correct:
+        numerator = p_know * (1 - p_slip)
+        denominator = numerator + (1 - p_know) * p_guess
+    else:
+        numerator = p_know * p_slip
+        denominator = numerator + (1 - p_know) * (1 - p_guess)
+    
+    posterior = numerator / denominator if denominator != 0 else p_know
+    
+    # Learning transition
+    updated = posterior + (1 - posterior) * p_learn
+    
+    return min(1.0, max(0.0, updated))
+
+def irt_probability(theta: float, b: float, a: float = 1.0) -> float:
+    """
+    Item Response Theory 2PL model
+    
+    Args:
+        theta: Student ability
+        b: Item difficulty
+        a: Item discrimination
+    
+    Returns:
+        Probability of correct response
+    """
+    return 1 / (1 + math.exp(-a * (theta - b)))
+
+def update_theta(theta: float, correct: bool, b: float, 
+                 a: float = 1.0, lr: float = 0.4) -> float:
+    """
+    Update theta using gradient of log-likelihood
+    
+    Args:
+        theta: Current ability estimate
+        correct: Whether answer was correct
+        b: Item difficulty
+        a: Item discrimination
+        lr: Learning rate
+    
+    Returns:
+        Updated ability estimate
+    """
+    predicted = irt_probability(theta, b, a)
+    actual = 1.0 if correct else 0.0
+    
+    # Simple gradient update
+    theta = theta + lr * (actual - predicted)
+    
+    return theta
+
+def classify_behavior(correct: bool, time_taken: float, 
+                      estimated_time: int) -> str:
+    """
+    Classify student behavior based on correctness and time
+    
+    Args:
+        correct: Whether answer was correct
+        time_taken: Actual time taken in seconds
+        estimated_time: Expected time in seconds
+    
+    Returns:
+        Behavior classification
+    """
+    if estimated_time <= 0:
+        return "normal_correct" if correct else "confused"
+        
+    ratio = time_taken / estimated_time
+    
+    if correct:
+        if ratio < 0.7:
+            return "strong_mastery"
+        elif ratio > 1.3:
+            return "weak_mastery"
+        else:
+            return "normal_correct"
+    else:
+        if ratio < 0.7:
+            return "guessing"
+        else:
+            return "confused"
+
+def update_mastery_from_behavior(score: float, behavior: str) -> float:
+    """
+    Update mastery score based on behavior classification
+    
+    Args:
+        score: Current mastery score
+        behavior: Behavior classification
+    
+    Returns:
+        Updated mastery score
+    """
+    weights = {
+        "strong_mastery": 2.0,
+        "normal_correct": 1.0,
+        "weak_mastery": 0.5,
+        "guessing": -1.0,
+        "confused": -0.5,
+    }
+    
+    # Convert to 0-1 range update
+    update = weights.get(behavior, 0) * 0.05
+    return min(1.0, max(0.0, score + update))
+
+def classify_error_type(question: Dict[str, Any], answer: int, 
+                       time_taken: float, atom_name: str) -> Optional[str]:
+    """
+    Classify error type based on question, answer, and timing
+    
+    Args:
+        question: Question dictionary
+        answer: Selected answer index
+        time_taken: Time taken in seconds
+        atom_name: Name of the teaching atom
+    
+    Returns:
+        Error type string or None if correct
+    """
+    correct = (answer == question.get('correct_index'))
+    estimated = question.get('estimated_time', 60)
+    time_ratio = time_taken / estimated if estimated > 0 else 1.0
+    
+    if not correct:
+        # Fast wrong = guessing
+        if time_ratio < 0.5:
+            return "guessing"
+        
+        # Slow wrong on easy question = conceptual
+        if question.get('difficulty') == 'easy' and time_ratio > 1.3:
+            return "conceptual"
+        
+        # Check for structural errors
+        q_text = question.get('question', '').lower()
+        if any(term in q_text for term in ['mapping', 'between', 'versus', 'vs', 'relationship']):
+            return "structural"
+        
+        # Check if it's a factual error
+        if question.get('difficulty') == 'easy':
+            return "factual"
+        
+        # Default
+        return "procedural"
+    
+    # Even correct answers can indicate issues
+    if correct and time_ratio < 0.3:
+        return "attentional"
+    
+    return None
+
+
+# backend/learning_engine/knowledge_tracing.py
+
+def classify_error_type(question, answer, time_taken, atom_name):
+    """Classify error type based on question, answer, and timing"""
+    if answer == -1:  # No answer
+        return "no_answer"
+    
+    estimated = question.get('estimated_time', 60)
+    time_ratio = time_taken / estimated if estimated > 0 else 1.0
+    
+    # Fast wrong = guessing
+    if time_ratio < 0.5:
+        return "guessing"
+    
+    # Slow wrong on easy question = conceptual
+    if question.get('difficulty') == 'easy' and time_ratio > 1.3:
+        return "conceptual"
+    
+    # Check for structural errors based on question content
+    q_text = question.get('question', '').lower()
+    if any(term in q_text for term in ['compare', 'contrast', 'difference', 'relationship']):
+        return "structural"
+    
+    # Check if it's a factual error
+    if question.get('difficulty') == 'easy':
+        return "factual"
+    
+    # Default
+    return "procedural"
+
+def bkt_update(p_know, correct, p_slip=0.1, p_guess=0.2, p_learn=0.15):
+    """Bayesian Knowledge Tracing update"""
+    if correct:
+        numerator = p_know * (1 - p_slip)
+        denominator = numerator + (1 - p_know) * p_guess
+    else:
+        numerator = p_know * p_slip
+        denominator = numerator + (1 - p_know) * (1 - p_guess)
+    
+    posterior = numerator / denominator if denominator != 0 else p_know
+    
+    # Learning transition
+    updated = posterior + (1 - posterior) * p_learn
+    
+    return min(1.0, max(0.0, updated))
+
+def update_theta(theta, correct, b=0.0, a=1.0, lr=0.4):
+    """Update IRT theta parameter"""
+    import math
+    
+    # IRT probability
+    def irt_prob(theta, b, a):
+        return 1 / (1 + math.exp(-a * (theta - b)))
+    
+    predicted = irt_prob(theta, b, a)
+    actual = 1.0 if correct else 0.0
+    
+    # Gradient update
+    theta = theta + lr * (actual - predicted)
+    
+    return theta
+
+
+
+# backend/learning_engine/knowledge_tracing.py - Enhanced version
+
+import math
+import numpy as np
+from typing import Dict, Any, Optional, Tuple
+
+def calculate_updated_mastery(
+    current_mastery: float,
+    current_theta: float,
+    question: Dict[str, Any],
+    correct: bool,
+    time_taken: float,
+    error_type: Optional[str]
+) -> Tuple[float, float, Dict[str, float]]:
+    """
+    Real-time mastery estimation after every answer
+    
+    Args:
+        current_mastery: Current mastery score (0-1)
+        current_theta: Current ability parameter
+        question: Question dictionary with difficulty, estimated_time
+        correct: Whether answer was correct
+        time_taken: Time taken in seconds
+        error_type: Classified error type or None if correct
+    
+    Returns:
+        Tuple of (new_mastery, new_theta, metrics)
+    """
+    # Extract question parameters
+    difficulty = question.get('difficulty', 'medium')
+    estimated_time = question.get('estimated_time', 60)
+    cognitive = question.get('cognitive_operation', 'recall')
+    
+    # Map difficulty to item parameter b (IRT difficulty)
+    difficulty_map = {
+        'easy': -1.0,
+        'medium': 0.0,
+        'hard': 1.0
+    }
+    b = difficulty_map.get(difficulty, 0.0)
+    
+    # Map cognitive to discrimination a (IRT discrimination)
+    cognitive_map = {
+        'recall': 0.8,
+        'apply': 1.2,
+        'analyze': 1.5
+    }
+    a = cognitive_map.get(cognitive, 1.0)
+    
+    # Calculate time ratio (normalized)
+    time_ratio = time_taken / estimated_time if estimated_time > 0 else 1.0
+    
+    # 1. Update IRT theta (ability)
+    new_theta = update_theta_weighted(
+        current_theta, correct, b, a, 
+        time_ratio, error_type
+    )
+    
+    # 2. Update mastery based on multiple factors
+    mastery_update = calculate_mastery_update(
+        current_mastery, correct, time_ratio, 
+        error_type, difficulty
+    )
+    
+    new_mastery = min(1.0, max(0.0, current_mastery + mastery_update))
+    
+    # 3. Calculate performance metrics
+    metrics = {
+        'theta_change': new_theta - current_theta,
+        'mastery_change': mastery_update,
+        'confidence': calculate_confidence(correct, time_ratio, error_type),
+        'learning_rate': mastery_update / 0.1,  # Normalized learning rate
+        'performance_quality': calculate_performance_quality(correct, time_ratio, error_type)
+    }
+    
+    return new_mastery, new_theta, metrics
+
+
+def update_theta_weighted(
+    theta: float,
+    correct: bool,
+    b: float,
+    a: float,
+    time_ratio: float,
+    error_type: Optional[str],
+    base_lr: float = 0.4
+) -> float:
+    """
+    Update theta with time and error-type weighting
+    """
+    # IRT probability
+    prob_correct = 1 / (1 + math.exp(-a * (theta - b)))
+    
+    # Actual outcome (continuous for weighted updates)
+    actual = 1.0 if correct else 0.0
+    
+    # Calculate confidence weight based on time
+    if correct:
+        # Fast correct = high confidence
+        confidence_weight = min(1.5, 1.0 / max(0.3, time_ratio))
+    else:
+        # Slow wrong = low confidence, fast wrong = guessing
+        if time_ratio < 0.5:  # Guessing
+            confidence_weight = 0.3
+        elif time_ratio > 1.5:  # Struggling
+            confidence_weight = 0.7
+        else:
+            confidence_weight = 0.5
+    
+    # Adjust learning rate based on error type
+    error_multipliers = {
+        'guessing': 0.3,      # Less update from guesses
+        'attentional': 0.6,    # Moderate update
+        'factual': 0.8,        # Stronger update
+        'procedural': 0.9,     # Strong update
+        'conceptual': 1.2,     # Very strong update (conceptual errors matter)
+        'structural': 1.1,      # Strong update
+        None: 1.0               # Normal for correct
+    }
+    
+    error_mult = error_multipliers.get(error_type, 1.0)
+    
+    # Apply weighted update
+    adjusted_lr = base_lr * confidence_weight * error_mult
+    theta_update = adjusted_lr * (actual - prob_correct)
+    
+    return theta + theta_update
+
+
+def calculate_mastery_update(
+    current_mastery: float,
+    correct: bool,
+    time_ratio: float,
+    error_type: Optional[str],
+    difficulty: str
+) -> float:
+    """
+    Calculate mastery update with nuanced factors
+    """
+    # Base update amount
+    base_update = 0.05
+    
+    # Difficulty multiplier
+    difficulty_multipliers = {
+        'easy': 0.7,    # Less impact from easy questions
+        'medium': 1.0,
+        'hard': 1.3     # More impact from hard questions
+    }
+    diff_mult = difficulty_multipliers.get(difficulty, 1.0)
+    
+    if correct:
+        # Time factor for correct answers
+        if time_ratio < 0.7:  # Fast correct
+            time_factor = 1.3
+        elif time_ratio < 1.0:  # Normal
+            time_factor = 1.0
+        else:  # Slow but correct
+            time_factor = 0.7
+        
+        # Mastery increases less as it approaches 1.0
+        ceiling_factor = (1.0 - current_mastery) * 2
+        
+        update = base_update * diff_mult * time_factor * ceiling_factor
+        
+    else:  # Incorrect
+        # Different impacts based on error type
+        error_impacts = {
+            'guessing': -0.02,      # Small penalty - just guessing
+            'attentional': -0.03,    # Small penalty - careless
+            'factual': -0.06,        # Moderate - missing facts
+            'procedural': -0.08,     # Significant - don't know process
+            'conceptual': -0.12,     # Severe - fundamental misunderstanding
+            'structural': -0.10      # Severe - can't see relationships
+        }
+        
+        update = error_impacts.get(error_type, -0.05)
+        
+        # Additional time factor for wrong answers
+        if time_ratio > 1.5:  # Very slow wrong = struggling
+            update *= 1.3
+        elif time_ratio < 0.5:  # Fast wrong = guessing
+            update *= 0.7
+    
+    return update
+
+
+def calculate_confidence(correct: bool, time_ratio: float, error_type: Optional[str]) -> float:
+    """
+    Calculate confidence in the response (0-1)
+    """
+    if correct:
+        # Higher confidence for fast correct answers
+        confidence = min(1.0, 1.2 - time_ratio * 0.3)
+    else:
+        # Lower confidence for wrong answers, especially fast wrong
+        if error_type == 'guessing':
+            confidence = 0.1
+        elif error_type == 'attentional':
+            confidence = 0.3
+        elif time_ratio < 0.5:
+            confidence = 0.2
+        elif time_ratio > 1.5:
+            confidence = 0.5  # At least tried
+        else:
+            confidence = 0.4
+    
+    return max(0.1, min(1.0, confidence))
+
+
+def calculate_performance_quality(correct: bool, time_ratio: float, error_type: Optional[str]) -> float:
+    """
+    Calculate overall performance quality (-1 to 1)
+    """
+    if correct:
+        quality = 1.0 - abs(1.0 - time_ratio) * 0.5
+    else:
+        if error_type == 'guessing':
+            quality = -0.8
+        elif error_type == 'attentional':
+            quality = -0.3
+        elif error_type == 'conceptual':
+            quality = -0.6
+        else:
+            quality = -0.4
+    
+    return max(-1.0, min(1.0, quality))
+
+
+================================================
+FILE: learning_engine/models.py
+================================================
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
+from enum import Enum
+
+
+class LearningPhase(str, Enum):
+    DIAGNOSTIC = "diagnostic"
+    TEACHING = "teaching"
+    PRACTICE = "practice"
+    REINFORCEMENT = "reinforcement"
+    MASTERY_CHECK = "mastery_check"
+    COMPLETE = "complete"
+
+
+class ErrorType(str, Enum):
+    CONCEPTUAL = "conceptual"
+    PROCEDURAL = "procedural"
+    FACTUAL = "factual"
+    GUESSING = "guessing"
+    STRUCTURAL = "structural"
+    ATTENTIONAL = "attentional"
+
+
+class PacingDecision(str, Enum):
+    SPEED_UP = "speed_up"
+    SLOW_DOWN = "slow_down"
+    SHARP_SLOWDOWN = "sharp_slowdown"
+    STAY = "stay"
+    REINFORCE = "reinforce"
+    ADVANCE = "advance"
+    RETREAT = "retreat"
+
+
+@dataclass
+class TeachingAtomState:
+    """Represents a teaching atom's state in memory â€” enriched for the 10-feature pacing engine."""
+    id: int
+    name: str
+    mastery_score: float = 0.3
+    phase: LearningPhase = LearningPhase.DIAGNOSTIC
+    streak: int = 0
+    hint_usage: int = 0
+    error_history: List[str] = None
+    retention_verified: bool = False
+
+    # â”€â”€ Per-atom learning speed (feature 2) â”€â”€
+    time_per_question: List[float] = None
+
+    # â”€â”€ Retention tracking (feature 6) â”€â”€
+    retention_score: float = 1.0
+    retention_checks_passed: int = 0
+    retention_checks_failed: int = 0
+    last_practiced_minutes_ago: float = 0.0
+
+    # â”€â”€ Velocity snapshots (feature 10) â”€â”€
+    velocity_snapshots: List[Dict] = None
+
+    def __post_init__(self):
+        if self.error_history is None:
+            self.error_history = []
+        if self.time_per_question is None:
+            self.time_per_question = []
+        if self.velocity_snapshots is None:
+            self.velocity_snapshots = []
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'mastery_score': self.mastery_score,
+            'phase': self.phase.value if hasattr(self.phase, 'value') else self.phase,
+            'streak': self.streak,
+            'hint_usage': self.hint_usage,
+            'retention_verified': self.retention_verified,
+            'error_history': self.error_history[-5:],
+            'retention_score': self.retention_score,
+            'retention_checks_passed': self.retention_checks_passed,
+            'time_per_question': self.time_per_question[-10:],
+            'velocity_snapshots': self.velocity_snapshots[-20:],
+        }
+
+
+
+================================================
+FILE: learning_engine/pacing_engine.py
+================================================
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x90 in position 1045: character maps to <undefined>
+
+
+================================================
+FILE: learning_engine/question_generator.py
+================================================
+# backend/learning_engine/question_generator.py - Complete fixed version
+
+import json
+import os
+from typing import Dict, List, Optional
+from groq import Groq
+import google.generativeai as genai
+from django.conf import settings
+import re   
+
+class QuestionGenerator:
+    """Generate questions and atoms for learning using AI"""
+    
+    def __init__(self):
+        # Initialize Groq client
+        groq_key = getattr(settings, 'GROQ_API_KEY', '')
+        self.groq_client = Groq(api_key=groq_key) if groq_key else None
+        
+        # Initialize Gemini client
+        gemini_key = getattr(settings, 'GOOGLE_API_KEY', '')
+        if gemini_key:
+            genai.configure(api_key=gemini_key)
+            self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+        else:
+            self.gemini_model = None
+
+    @staticmethod
+    def _validate_questions(questions: list) -> list:
+        """
+        Validate and sanitise AI-generated questions.
+        - Ensures correct_index is an int within [0, len(options)-1]
+        - Ensures options is a list of exactly 4 strings
+        - Drops any malformed question instead of passing it through
+        """
+        validated = []
+        for q in questions:
+            opts = q.get('options')
+            if not isinstance(opts, list) or len(opts) != 4:
+                continue  # Skip malformed question
+
+            ci = q.get('correct_index')
+            try:
+                ci = int(ci)
+            except (TypeError, ValueError):
+                ci = 0  # Fallback to first option
+
+            if ci < 0 or ci >= len(opts):
+                ci = 0  # Clamp to safe default
+
+            q['correct_index'] = ci
+            validated.append(q)
+        return validated
+    
+    def generate_atoms(self, subject: str, concept: str) -> List[str]:
+        """
+        Generate atomic concepts using Gemini
+        
+        Args:
+            subject: Subject name (e.g., 'Microprocessor')
+            concept: Concept name (e.g., 'Memory Organization')
+        
+        Returns:
+            List of atomic concept names
+        """
+        if not self.gemini_model:
+            print("Gemini model not available, using fallback atoms")
+            return self._get_fallback_atoms(subject, concept)
+        
+        prompt = f"""
+        You are a master curriculum designer and senior educator with over 30 years of classroom teaching experience, specializing in breaking down subjects into precise, teachable, and assessable atomic learning units.
+
+        Your task is to generate atomic sub-concepts ("atoms") for curriculum design.
+
+        Subject: {subject}
+        Concept: {concept}
+
+        Your atoms must reflect how an expert teacher would naturally divide this concept for step-by-step teaching, assessment, and mastery tracking in a real classroom.
+
+        PEDAGOGICAL REQUIREMENTS:
+
+        1. Each atom must represent ONE distinct, teachable knowledge unit that can be:
+
+        * Explained independently
+        * Taught in a short lesson (5â€“15 minutes)
+        * Assessed with 1â€“3 focused questions
+
+        2. All atoms must be at the SAME pedagogical level:
+
+        * Do NOT mix beginner and advanced units
+        * Do NOT mix theory and applications
+        * Do NOT mix definition-level and mastery-level units
+
+        3. Atoms must be mutually exclusive:
+
+        * No overlap
+        * No redundancy
+        * No containment relationships
+        * No parentâ€“child relationships
+
+        4. Together, atoms should cover the core structural understanding of the concept,
+        as expected in a standard academic curriculum.
+
+        STRUCTURAL RULES:
+
+        5. Generate EXACTLY 4 to 6 atoms.
+
+        6. Each atom must be:
+
+        * A noun or noun phrase
+        * Maximum 4 words
+        * No verbs
+        * No full sentences
+
+        7. Do NOT include:
+
+        * The concept name itself
+        * Examples
+        * Applications
+        * Real-world use cases
+        * Problem-solving techniques
+        * Compound multi-idea phrases
+
+        8. Prefer academically standard terminology used in textbooks.
+
+        9. Avoid artificial fragmentation. Each atom must feel natural to a teacher.
+
+        OUTPUT RULES:
+
+        10. Output STRICT JSON only.
+
+        11. Do NOT include explanations.
+
+        Output format:
+
+        {{
+        "atoms": [
+        "Atom 1",
+        "Atom 2",
+        "Atom 3",
+        "Atom 4"
+        ]
+        }}
+
+        If proper pedagogically valid atoms cannot be generated, return:
+
+        {{"atoms": []}}
+
+        """
+        
+        try:
+            response = self.gemini_model.generate_content(prompt)
+            
+            # Extract JSON from response
+            text = response.text
+            if "```" in text:
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            
+            result = json.loads(text.strip())
+            atoms = result.get("atoms", [])
+            
+            # Validate atom count
+            if len(atoms) < 4 or len(atoms) > 6:
+                print(f"Invalid atom count: {len(atoms)}, using fallback")
+                return self._get_fallback_atoms(subject, concept)
+            
+            return atoms
+            
+        except Exception as e:
+            print(f"Error generating atoms: {e}")
+            return self._get_fallback_atoms(subject, concept)
+    
+    # backend/learning_engine/question_generator.py - Updated method
+
+    def generate_questions(self, subject: str, concept: str, atom: str,
+                        target_difficulty: str, count: int, 
+                        knowledge_level: str = 'intermediate',
+                        error_focus: List[str] = None) -> List[Dict]:
+        """
+        Generate questions for an atom with dynamic difficulty
+        
+        Args:
+            subject: Subject name
+            concept: Concept name
+            atom: Atomic concept name
+            target_difficulty: Specific difficulty to generate ('easy', 'medium', 'hard')
+            count: Number of questions needed
+            knowledge_level: Student's knowledge level
+            error_focus: Optional list of error types to address
+        
+        Returns:
+            List of question dictionaries
+        """
+        print(f"Generating {count} {target_difficulty} questions for atom: {atom}")
+        
+        if not self.groq_client or count == 0:
+            return self._get_fallback_questions(atom, target_difficulty, count, knowledge_level)
+        
+        # Adjust based on knowledge level
+        level_adjustments = {
+            'zero': {
+                'cognitive': ['recall'],
+                'time_factor': 1.5,
+                'complexity': 'very simple, foundational',
+                'hint_level': 'detailed'
+            },
+            'beginner': {
+                'cognitive': ['recall', 'apply'],
+                'time_factor': 1.2,
+                'complexity': 'straightforward',
+                'hint_level': 'clear'
+            },
+            'intermediate': {
+                'cognitive': ['recall', 'apply', 'analyze'],
+                'time_factor': 1.0,
+                'complexity': 'moderate',
+                'hint_level': 'moderate'
+            },
+            'advanced': {
+                'cognitive': ['apply', 'analyze'],
+                'time_factor': 0.8,
+                'complexity': 'challenging',
+                'hint_level': 'subtle'
+            }
+        }
+        
+        adj = level_adjustments.get(knowledge_level, level_adjustments['intermediate'])
+        
+        # Determine cognitive operations for this difficulty
+        if target_difficulty == 'easy':
+            allowed_cognitive = ['recall']
+        elif target_difficulty == 'medium':
+            allowed_cognitive = ['recall', 'apply']
+        else:  # hard
+            allowed_cognitive = ['apply', 'analyze']
+        
+        # Add error focus if provided
+        error_context = ""
+        if error_focus:
+            error_context = f"""
+            Focus on addressing these common errors:
+            {', '.join(error_focus)}
+            
+            Create questions that help the student overcome these specific difficulties.
+            """
+        
+        prompt = f"""
+            You are an experienced teacher creating high-quality conceptual assessment questions to evaluate deep student understanding.
+
+            Subject: {subject}
+            Concept: {concept}
+            Atomic Concept: {atom}
+            Student Level: {knowledge_level.upper()}
+            Target Difficulty: {target_difficulty.upper()}
+
+            Generate EXACTLY {count} {target_difficulty} question(s) with these characteristics:
+
+            - Complexity: {adj['complexity']}
+            - Cognitive levels: {', '.join(allowed_cognitive)}
+            - Hint level: {adj['hint_level']}
+
+            {error_context}
+
+            CRITICAL QUALITY REQUIREMENTS:
+
+            The goal is to test CONCEPTUAL UNDERSTANDING, not memorization.
+
+            Each question MUST:
+
+            - Be written like an experienced teacher checking real understanding
+            - Require thinking, reasoning, or application â€” NOT simple definition recall
+            - Be scenario-based, example-based, comparison-based, or reasoning-based whenever possible
+            - Explicitly involve the atomic concept in a meaningful way
+            - Avoid trivial, obvious, or keyword-matching questions
+            - Avoid fill-in-the-blank style
+
+            OPTIONS REQUIREMENTS (VERY IMPORTANT):
+
+            Each question must have exactly 4 options where:
+
+            - All options are plausible and believable
+            - All options belong to the SAME conceptual category
+            - Incorrect options must reflect common student misconceptions or mistakes
+            - Avoid joke options, extreme options, or obviously wrong answers
+            - Avoid options that differ only in grammar or wording tricks
+
+            QUESTION LENGTH:
+
+            - 10 to 35 words REQUIRED
+            - Must be self-contained and clear
+
+            DIFFICULTY REQUIREMENTS:
+
+            For {target_difficulty} questions:
+
+            Easy:
+            - Simple scenario or example
+            - Direct conceptual application
+
+            Medium:
+            - Requires reasoning, interpretation, or comparison
+
+            Hard:
+            - Multi-step reasoning, prediction, or analysis
+
+
+            Each question MUST include:
+
+            - "difficulty": "{target_difficulty}"
+            - "cognitive_operation": one of {allowed_cognitive}
+            - "estimated_time": integer (seconds)
+                recall: 20-40
+                apply: 40-90
+                analyze: 90-150
+            - "question": string
+            - "options": array of exactly 4 strings
+            - "correct_index": integer (0-3)
+
+            OUTPUT STRICT JSON ONLY:
+
+            {{
+                "questions": [
+                    {{
+                        "difficulty": "{target_difficulty}",
+                        "cognitive_operation": "recall",
+                        "estimated_time": 30,
+                        "question": "Question text here?",
+                        "options": [
+                            "Option A",
+                            "Option B",
+                            "Option C",
+                            "Option D"
+                        ],
+                        "correct_index": 1
+                    }}
+                ]
+            }}
+
+            If constraints cannot be satisfied, return:
+
+            {{"questions": []}}
+            """
+
+        
+        try:
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=2048,
+            )
+            
+            raw_text = response.choices[0].message.content
+            if "```" in raw_text:
+                raw_text = raw_text.split("```")[1]
+                if raw_text.startswith("json"):
+                    raw_text = raw_text[4:]
+            
+            raw_text = re.sub(r'[\x00-\x1f\x7f]', lambda m: ' ' if m.group() in ('\n', '\r', '\t') else '', raw_text)
+            result = json.loads(raw_text.strip())
+            questions = result.get("questions", [])
+
+            # Validate correct_index and options for every question
+            questions = self._validate_questions(questions)
+            
+            # Adjust estimated time based on knowledge level
+            for q in questions:
+                q['estimated_time'] = int(q.get('estimated_time', 60) * adj['time_factor'])
+            
+            print(f"Generated {len(questions)} {target_difficulty} questions")
+            return questions
+            
+        except Exception as e:
+            print(f"Error generating questions: {e}")
+            return self._get_fallback_questions(atom, target_difficulty, count, knowledge_level)
+    
+    def _get_fallback_atoms(self, subject: str, concept: str) -> List[str]:
+        """Provide fallback atoms when AI generation fails"""
+        # Common fallback atoms based on concept
+        fallbacks = {
+            "Memory Organization": [
+                "Address Space",
+                "Memory Hierarchy",
+                "Cache Memory",
+                "RAM vs ROM",
+                "Memory Mapping"
+            ],
+            "Address Space": [
+                "Address Lines",
+                "Memory Locations",
+                "Address Decoding",
+                "Word Size",
+                "Byte Addressing"
+            ],
+            "Cache Memory": [
+                "Cache Levels",
+                "Cache Hit/Miss",
+                "Cache Mapping",
+                "Replacement Policy",
+                "Write Policy"
+            ]
+        }
+        
+        # Try to find matching fallback
+        for key, atoms in fallbacks.items():
+            if key.lower() in concept.lower():
+                return atoms
+        
+        # Generic fallback
+        return [
+            f"{concept} Basics",
+            f"{concept} Structure",
+            f"{concept} Operations",
+            f"{concept} Applications",
+            f"{concept} Limitations"
+        ]
+    
+    def _get_fallback_questions(self, atom: str, target_difficulty: str, count: int,
+                                level: str = 'intermediate') -> List[Dict]:
+        """Provide fallback questions when AI generation fails"""
+        questions = []
+
+        for _ in range(count):
+            if target_difficulty == 'easy':
+                questions.append({
+                    "difficulty": "easy",
+                    "cognitive_operation": "recall",
+                    "estimated_time": 30,
+                    "question": f"What is the primary purpose of {atom}?",
+                    "options": [
+                        f"To manage {atom} operations",
+                        "To store data permanently",
+                        "To execute instructions",
+                        "To control peripherals"
+                    ],
+                    "correct_index": 0
+                })
+            elif target_difficulty == 'medium':
+                questions.append({
+                    "difficulty": "medium",
+                    "cognitive_operation": "apply",
+                    "estimated_time": 60,
+                    "question": f"Which scenario best demonstrates the application of {atom}?",
+                    "options": [
+                        f"When implementing {atom} in a real system",
+                        "During basic operations",
+                        "In simple calculations",
+                        "At the start of processing"
+                    ],
+                    "correct_index": 0
+                })
+            else:
+                questions.append({
+                    "difficulty": "hard",
+                    "cognitive_operation": "analyze",
+                    "estimated_time": 90,
+                    "question": f"What would happen if {atom} was implemented incorrectly?",
+                    "options": [
+                        "System performance would degrade",
+                        "Nothing would change",
+                        "The system would run faster",
+                        "Data would be more secure"
+                    ],
+                    "correct_index": 0
+                })
+
+        return questions
+    
+    def generate_complete_concept(self, subject: str, concept: str) -> Dict:
+        """
+        Generate complete concept with atoms and questions
+        
+        Args:
+            subject: Subject name
+            concept: Concept name
+        
+        Returns:
+            Dictionary with atoms and questions
+        """
+        print(f"Generating complete concept for {subject} - {concept}")
+        
+        # Generate atoms
+        atoms = self.generate_atoms(subject, concept)
+        print(f"Generated {len(atoms)} atoms: {atoms}")
+        
+        result = {
+            "concept": concept,
+            "subject": subject,
+            "atoms": {}
+        }
+        
+        # Generate questions for each atom
+        for atom in atoms:
+            print(f"Generating questions for atom: {atom}")
+            # Generate 2 easy and 2 medium questions per atom
+            questions = []
+            questions.extend(self.generate_questions(
+                subject=subject,
+                concept=concept,
+                atom=atom,
+                target_difficulty='easy',
+                count=2,
+                knowledge_level='intermediate'
+            ))
+            questions.extend(self.generate_questions(
+                subject=subject,
+                concept=concept,
+                atom=atom,
+                target_difficulty='medium',
+                count=2,
+                knowledge_level='intermediate'
+            ))
+            
+            result["atoms"][atom] = {
+                "name": atom,
+                "questions": questions
+            }
+            
+            print(f"Generated {len(questions)} questions for {atom}")
+        
+        return result
+    
+    
+    
+    def generate_initial_quiz(self, subject: str, concept: str,
+                              knowledge_level: str = 'intermediate',
+                              count: int = 5) -> List[Dict]:
+        """
+        Simple diagnostic quiz based only on subject/concept/knowledge level.
+        Uses the same question generator with atom=concept for simplicity.
+        """
+        easy_count = max(1, count // 2)
+        medium_count = max(0, count - easy_count)
+
+        questions = []
+        questions.extend(self.generate_questions(
+            subject=subject,
+            concept=concept,
+            atom=concept,
+            target_difficulty='easy',
+            count=easy_count,
+            knowledge_level=knowledge_level
+        ))
+        if medium_count > 0:
+            questions.extend(self.generate_questions(
+                subject=subject,
+                concept=concept,
+                atom=concept,
+                target_difficulty='medium',
+                count=medium_count,
+                knowledge_level=knowledge_level
+            ))
+
+        return questions
+
+    # â”€â”€ NEW: Concept overview for zero-knowledge students â”€â”€
+    def generate_concept_overview(self, subject: str, concept: str, atoms: List[str]) -> Dict:
+        """
+        Generate a quick, beginner-friendly overview of the concept and its atoms.
+        Used when knowledge_level == 'zero' BEFORE the diagnostic quiz.
+        """
+        atoms_text = "\n".join([f"  {i+1}. {a}" for i, a in enumerate(atoms)])
+
+        prompt = f"""
+You are creating a SHORT, beginner-friendly overview for a student who has ZERO prior knowledge.
+
+Subject: {subject}
+Concept: {concept}
+Atomic sub-topics:
+{atoms_text}
+
+Generate a JSON overview with these keys:
+
+1. "overview" â€” 3-5 sentences explaining what this concept is about in the simplest possible language.
+   Use analogies, everyday language, no jargon so the student can develop a mental model.
+
+2. "why_it_matters" â€” 2-3 sentences on why this concept matters in real life.
+
+3. "what_you_will_learn" â€” A JSON array of short strings (one per atom), each describing
+   what the student will learn in 8-12 words. Written in second person ("You will learn...").
+
+4. "key_terms" â€” A JSON array of objects, each with "term" and "simple_definition" (1 sentence, plain English).
+   List 3-5 key terms the student will encounter.
+
+5. "encouragement" â€” One motivational sentence for a beginner.
+
+Return STRICT JSON only. No markdown, no explanation outside the JSON.
+
+{{
+  "overview": "...",
+  "why_it_matters": "...",
+  "what_you_will_learn": ["...", "..."],
+  "key_terms": [{{"term": "...", "simple_definition": "..."}}],
+  "encouragement": "..."
+}}
+"""
+        if not self.groq_client:
+            return self._fallback_concept_overview(subject, concept, atoms)
+
+        try:
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+                max_tokens=1024,
+            )
+            raw = response.choices[0].message.content
+            if "```" in raw:
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = re.sub(r'[\x00-\x1f\x7f]', lambda m: ' ' if m.group() in ('\n', '\r', '\t') else '', raw)
+            return json.loads(raw.strip())
+        except Exception as e:
+            print(f"Error generating concept overview: {e}")
+            return self._fallback_concept_overview(subject, concept, atoms)
+
+    def _fallback_concept_overview(self, subject, concept, atoms):
+        return {
+            "overview": f"{concept} is a fundamental topic in {subject}. It covers several important ideas that build on each other. Don't worry if it sounds complex â€” we'll break it into small, easy pieces.",
+            "why_it_matters": f"Understanding {concept} will help you grasp core principles of {subject} and apply them in practice.",
+            "what_you_will_learn": [f"You will learn about {a}" for a in atoms],
+            "key_terms": [{"term": a, "simple_definition": f"A key part of {concept}"} for a in atoms[:4]],
+            "encouragement": "Every expert was once a beginner. Let's start this journey together!"
+        }
+
+    # â”€â”€ NEW: Atom summary after completion â”€â”€
+    def generate_atom_summary(self, subject: str, concept: str, atom_name: str,
+                              teaching_content: Dict, mastery_score: float,
+                              error_types: List[str] = None) -> Dict:
+        """
+        Generate a concise summary after atom completion: quick notes, must-remember items,
+        common pitfalls, and suggestions.
+        """
+        explanation = teaching_content.get('explanation', '') if teaching_content else ''
+        analogy = teaching_content.get('analogy', '') if teaching_content else ''
+
+        error_context = ""
+        if error_types:
+            from collections import Counter
+            err_counts = Counter(error_types)
+            error_context = f"\nThe student made these types of errors: {dict(err_counts)}. Address the most common ones in your tips."
+
+        mastery_label = "low" if mastery_score < 0.5 else "moderate" if mastery_score < 0.75 else "high"
+
+        prompt = f"""
+You are summarizing an atomic concept that a student just finished learning.
+
+Subject: {subject}
+Concept: {concept}
+Atom: {atom_name}
+Mastery: {mastery_score:.0%} ({mastery_label})
+
+Teaching content shown:
+Explanation: {explanation[:500]}
+Analogy: {analogy[:200]}
+{error_context}
+
+Generate a concise review summary as JSON:
+
+1. "summary" â€” 2-3 sentence recap of the core idea (simple, memorable).
+2. "quick_notes" â€” Array of 3-5 bullet-point strings, each a key fact or insight.
+3. "must_remember" â€” Array of 2-3 strings: the absolute essentials that MUST stick.
+4. "common_pitfalls" â€” Array of 1-3 strings: typical mistakes to watch out for.
+5. "suggestions" â€” Array of 1-3 strings: what to do next based on mastery level.
+   If mastery is low, suggest review. If high, suggest connecting to next atoms.
+6. "confidence_boost" â€” One short motivational line based on their mastery.
+
+Return STRICT JSON only:
+{{
+  "summary": "...",
+  "quick_notes": ["...", "..."],
+  "must_remember": ["...", "..."],
+  "common_pitfalls": ["..."],
+  "suggestions": ["..."],
+  "confidence_boost": "..."
+}}
+"""
+        if not self.groq_client:
+            return self._fallback_atom_summary(atom_name, concept, mastery_score)
+
+        try:
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=800,
+            )
+            raw = response.choices[0].message.content
+            if "```" in raw:
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = re.sub(r'[\x00-\x1f\x7f]', lambda m: ' ' if m.group() in ('\n', '\r', '\t') else '', raw)
+            return json.loads(raw.strip())
+        except Exception as e:
+            print(f"Error generating atom summary: {e}")
+            return self._fallback_atom_summary(atom_name, concept, mastery_score)
+
+    def _fallback_atom_summary(self, atom_name, concept, mastery_score):
+        if mastery_score >= 0.75:
+            boost = f"Excellent work on {atom_name}! You've built a strong foundation."
+            suggestions = ["Try connecting this concept to the next atom.", "You're ready to tackle harder problems."]
+        elif mastery_score >= 0.5:
+            boost = f"Good progress on {atom_name}. A quick review will make it stick."
+            suggestions = ["Revisit the explanation once more.", "Practice one more round for confidence."]
+        else:
+            boost = f"Don't worry â€” {atom_name} takes time. Every attempt makes you stronger."
+            suggestions = ["Re-read the teaching material carefully.", "Focus on the basics before moving on.", "Try explaining it to yourself in your own words."]
+        return {
+            "summary": f"{atom_name} is a key building block of {concept}. Understanding it well will help you with the remaining atoms.",
+            "quick_notes": [f"Core idea: {atom_name} is fundamental to {concept}", "Review the analogy to reinforce your understanding", "Connect it to real-world examples"],
+            "must_remember": [f"The definition and role of {atom_name}", "How it relates to the broader concept"],
+            "common_pitfalls": [f"Confusing {atom_name} with related but different ideas"],
+            "suggestions": suggestions,
+            "confidence_boost": boost
+        }
+
+    def generate_questions_from_teaching(self, subject, concept, atom, teaching_content, 
+                                        need_easy=1, need_medium=2, need_hard=0, 
+                                        knowledge_level='intermediate'):
+        """
+        Generate questions based on the teaching content that was shown
+        
+        Args:
+            subject: Subject name
+            concept: Concept name
+            atom: Atomic concept name
+            teaching_content: Dict with explanation, analogy, examples
+            need_easy: Number of easy questions
+            need_medium: Number of medium questions
+            need_hard: Number of hard questions
+            knowledge_level: Student's knowledge level
+        
+        Returns:
+            List of question dictionaries
+        """
+        print(f"Generating questions from teaching for atom: {atom}")
+        
+        if not self.groq_client:
+            print("Groq client not available, using fallback")
+            return self._get_fallback_questions_from_teaching(atom, need_easy, need_medium, need_hard)
+        
+        total_needed = need_easy + need_medium + need_hard
+        
+        # Extract teaching content
+        explanation = teaching_content.get('explanation', '')
+        analogy = teaching_content.get('analogy', '')
+        examples = teaching_content.get('examples', [])
+        
+        examples_text = "\n".join([f"- {ex}" for ex in examples if ex])
+        
+        prompt = f"""
+            You are an experienced teacher generating conceptual assessment questions to verify whether a student truly understood the concept that was just taught.
+
+            Subject: {subject}
+            Concept: {concept}
+            Atomic Concept: {atom}
+            Student Level: {knowledge_level.upper()}
+
+            TEACHING CONTENT SHOWN TO STUDENT:
+
+            Explanation:
+            {explanation}
+
+            Analogy:
+            {analogy}
+
+            Examples/Applications:
+            {examples_text}
+
+
+            TASK:
+
+            Generate EXACTLY {total_needed} multiple-choice questions that test CONCEPTUAL UNDERSTANDING of "{atom}" based on the teaching content.
+
+            IMPORTANT:
+
+            The goal is NOT to test memory of the explanation, analogy, or examples.
+
+            The goal is to test whether the student understood the underlying CONCEPT.
+
+
+            CRITICAL RULES:
+
+            1. DO NOT ask questions about the analogy itself
+            2. DO NOT ask questions about the specific examples themselves
+            3. DO NOT ask questions that require recalling sentences from the explanation
+
+            4. Instead, create NEW conceptual situations where the student must APPLY the concept
+
+            5. Questions must test:
+
+            - understanding of how the concept works
+            - when the concept applies
+            - when the concept does NOT apply
+            - consequences of using or misusing the concept
+
+            6. Each question must be meaningful, realistic, and require thinking
+
+            7. Avoid definition questions starting with:
+
+            - What is
+            - Define
+            - Identify
+
+            8. Each question must be 18â€“35 words
+
+            9. Each question must have exactly 4 options
+
+            10. All options must be:
+
+            - plausible
+            - same conceptual category
+            - based on realistic student mistakes or misconceptions
+
+            11. Avoid obvious wrong answers
+
+
+            DIFFICULTY DISTRIBUTION:
+
+            Easy ({need_easy}):
+
+            - Simple conceptual application
+
+            Medium ({need_medium}):
+
+            - Requires reasoning or interpretation
+
+            Hard ({need_hard}):
+
+            - Requires deeper reasoning, prediction, or identifying incorrect application
+
+
+
+            OUTPUT STRICT JSON ONLY:
+
+            {{
+                "questions": [
+                    {{
+                        "difficulty": "easy",
+                        "cognitive_operation": "apply",
+                        "estimated_time": 40,
+                        "question": "Question text here?",
+                        "options": [
+                            "Option A",
+                            "Option B",
+                            "Option C",
+                            "Option D"
+                        ],
+                        "correct_index": 0
+                    }}
+                ]
+            }}
+            """
+
+        
+        try:
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=2048,
+            )
+            
+            raw_text = response.choices[0].message.content
+            if "```" in raw_text:
+                raw_text = raw_text.split("```")[1]
+                if raw_text.startswith("json"):
+                    raw_text = raw_text[4:]
+            
+            raw_text = re.sub(r'[\x00-\x1f\x7f]', lambda m: ' ' if m.group() in ('\n', '\r', '\t') else '', raw_text)
+            result = json.loads(raw_text.strip())
+            questions = result.get("questions", [])
+
+            # Validate correct_index and options for every question
+            questions = self._validate_questions(questions)
+            
+            print(f"Generated {len(questions)} questions from teaching")
+            return questions
+            
+        except Exception as e:
+            print(f"Error generating questions from teaching: {e}")
+            return self._get_fallback_questions_from_teaching(atom, need_easy, need_medium, need_hard)
+
+    def _get_fallback_questions_from_teaching(self, atom, need_easy, need_medium, need_hard):
+        """Fallback questions based on teaching content"""
+        questions = []
+        
+        # Easy questions
+        for i in range(need_easy):
+            questions.append({
+                "difficulty": "easy",
+                "cognitive_operation": "recall",
+                "estimated_time": 30,
+                "question": f"What is the main purpose of {atom}?",
+                "options": [
+                    f"To {atom.lower()} efficiently",
+                    "To store data permanently",
+                    "To execute instructions",
+                    "To control peripherals"
+                ],
+                "correct_index": 0
+            })
+        
+        # Medium questions
+        for i in range(need_medium):
+            questions.append({
+                "difficulty": "medium",
+                "cognitive_operation": "apply",
+                "estimated_time": 60,
+                "question": f"Which scenario best demonstrates the application of {atom}?",
+                "options": [
+                    f"When implementing {atom} in a real system",
+                    "During basic operations",
+                    "In simple calculations",
+                    "At the start of processing"
+                ],
+                "correct_index": 0
+            })
+        
+        # Hard questions
+        for i in range(need_hard):
+            questions.append({
+                "difficulty": "hard",
+                "cognitive_operation": "analyze",
+                "estimated_time": 90,
+                "question": f"What would happen if {atom} was implemented incorrectly?",
+                "options": [
+                    "System performance would degrade",
+                    "Nothing would change",
+                    "The system would run faster",
+                    "Data would be more secure"
+                ],
+                "correct_index": 0
+            })
+        
+        return questions
+
+
+================================================
+FILE: learning_engine/utils.py
+================================================
+import json
+from typing import Any, Dict, List
+
+def extract_json(text: str) -> str:
+    """Extract JSON from text that might contain markdown code blocks"""
+    text = text.strip()
+    if text.startswith("```"):
+        # Remove fenced code block markers
+        lines = [ln.rstrip() for ln in text.splitlines()]
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    return text
+
+def normalize_difficulty(value: str) -> str:
+    """Normalize difficulty string"""
+    v = (value or "").strip().lower()
+    if v in ("med", "mid"):
+        return "medium"
+    return v
+
+def difficulty_count(questions: List[Dict[str, Any]], difficulty: str) -> int:
+    """Count questions of a specific difficulty"""
+    d = normalize_difficulty(difficulty)
+    return sum(1 for q in questions if normalize_difficulty(q.get("difficulty", "")) == d)
+
+def existing_texts(questions: List[Dict[str, Any]], difficulty: str) -> set:
+    """Get set of question texts for a specific difficulty"""
+    d = normalize_difficulty(difficulty)
+    return {
+        (q.get("question") or "").strip().lower()
+        for q in questions
+        if normalize_difficulty(q.get("difficulty", "")) == d
+    }
+
