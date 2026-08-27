@@ -9,16 +9,6 @@
 [![Groq LLaMA 3.3](https://img.shields.io/badge/Groq-LLaMA%203.3%2070B-F55036?logo=groq&logoColor=white)](https://groq.com)
 [![Google Gemini](https://img.shields.io/badge/Google-Gemini%202.5%20Flash-8E75B2?logo=googlegemini&logoColor=white)](https://ai.google.dev)
 
----
-
-## 🏆 Hackathon Submission Overview
-
-* **Hackathon:** *Rebuild the Classroom: Build the tool that teaches when AI is the teacher.*
-* **Organizer:** LV8 Tech
-* **Track / Focus:** Applied AI / AI Engineering
-* **Core Product Thesis:** *An AI teacher should not simply answer a student's question. It should observe evidence of understanding in real time and continuously decide what to teach next, how difficult it should be, when to practice, when to review, and when to slow down.*
-
----
 
 ## 📖 Table of Contents
 
@@ -520,8 +510,3 @@ In accordance with strict hackathon evaluation standards, here is an authentic a
 * ⚠️ **LLM Generation Latency:** While Groq inference is near-instantaneous (~300ms), cold-start fallback generation on complex concepts can take 2–3 seconds. Client-side optimistic loading states are used to maintain responsiveness.
 * ⚠️ **Open-Response Grading:** The current assessment engine focuses on dynamically calibrated multiple-choice and multi-step cognitive questions. Fine-grained semantic grading of free-text essay answers is scheduled for the next release.
 
----
-
-<div align="center">
-  <sub>Built for the LV8 Tech Hackathon • <b>AdaptiveLearning</b>: Rebuilding the classroom through AI-native pedagogical intelligence.</sub>
-</div>
