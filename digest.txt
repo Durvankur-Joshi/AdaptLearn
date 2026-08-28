@@ -3,11 +3,11 @@ Directory structure:
     ├── README.md
     ├── tempCodeRunnerFile.python
     ├── backend/
-    │   ├── a.py
     │   ├── manage.py
     │   ├── Procfile
     │   ├── req.txt
     │   ├── requirements.txt
+    │   ├── .env.example
     │   ├── accounts/
     │   │   ├── __init__.py
     │   │   ├── admin.py
@@ -49,6 +49,7 @@ Directory structure:
     │       ├── external_resources.py
     │       ├── knowledge_tracing.py
     │       ├── models.py
+    │       ├── openrouter_client.py
     │       ├── pacing_engine.py
     │       ├── question_generator.py
     │       ├── tests_question_generation.py
@@ -200,85 +201,6 @@ if __name__ == "__main__":
 
 
 ================================================
-FILE: backend/a.py
-================================================
-# backend/test_question_generator.py
-
-import os
-import sys
-import django
-
-# Setup Django environment
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
-django.setup()
-
-from learning_engine.question_generator import QuestionGenerator
-from django.conf import settings
-
-def test_generator():
-    print("=" * 50)
-    print("Testing QuestionGenerator")
-    print("=" * 50)
-    
-    print(f"GROQ_API_KEY present: {'Yes' if settings.GROQ_API_KEY else 'No'}")
-    print(f"GOOGLE_API_KEY present: {'Yes' if settings.GOOGLE_API_KEY else 'No'}")
-    
-    generator = QuestionGenerator()
-    print(f"Groq client initialized: {'Yes' if generator.groq_client else 'No'}")
-    print(f"Gemini model initialized: {'Yes' if generator.gemini_model else 'No'}")
-    
-    if not generator.groq_client and not generator.gemini_model:
-        print("\n❌ ERROR: No AI clients available! Check your API keys.")
-        return
-    
-    print("\n" + "=" * 50)
-    print("Test 1: Generate atoms")
-    print("=" * 50)
-    atoms = generator.generate_atoms("Microprocessor", "Memory Organization")
-    print(f"Generated atoms: {atoms}")
-    
-    if atoms:
-        print("\n" + "=" * 50)
-        print("Test 2: Generate questions for first atom")
-        print("=" * 50)
-        questions = []
-        questions.extend(generator.generate_questions(
-            subject="Microprocessor",
-            concept="Memory Organization",
-            atom=atoms[0],
-            target_difficulty="easy",
-            count=2,
-            knowledge_level='intermediate'
-        ))
-        questions.extend(generator.generate_questions(
-            subject="Microprocessor",
-            concept="Memory Organization",
-            atom=atoms[0],
-            target_difficulty="medium",
-            count=2,
-            knowledge_level='intermediate'
-        ))
-        print(f"Generated {len(questions)} questions")
-        for i, q in enumerate(questions):
-            print(f"\nQ{i+1}: {q.get('question', 'No question')}")
-            print(f"   Difficulty: {q.get('difficulty')}")
-            print(f"   Cognitive: {q.get('cognitive_operation')}")
-            print(f"   Time: {q.get('estimated_time')}s")
-    
-    print("\n" + "=" * 50)
-    print("Test 3: Generate complete concept")
-    print("=" * 50)
-    result = generator.generate_complete_concept("Microprocessor", "Memory Organization")
-    print(f"Generated concept with {len(result.get('atoms', {}))} atoms")
-    for atom_name, atom_data in result['atoms'].items():
-        print(f"  - {atom_name}: {len(atom_data['questions'])} questions")
-
-if __name__ == "__main__":
-    test_generator()
-
-
-================================================
 FILE: backend/manage.py
 ================================================
 #!/usr/bin/env python
@@ -404,6 +326,20 @@ win32_setctime==1.2.0
 yarl==1.22.0
 youtube-search==2.2.0
 youtube-search-python==1.6.6
+
+
+
+================================================
+FILE: backend/.env.example
+================================================
+# OpenRouter Configuration for Question Generation
+API_KEY=
+MODEL=nvidia/nemotron-3.5-lightning:free
+
+# Other Feature API Keys
+SERPAPI_KEY=
+GOOGLE_API_KEY=
+GROQ_API_KEY=
 
 
 
@@ -1748,7 +1684,7 @@ urlpatterns = [
 ================================================
 FILE: backend/accounts/views.py
 ================================================
-Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 117098: character maps to <undefined>
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 116758: character maps to <undefined>
 
 
 ================================================
@@ -2621,6 +2557,9 @@ LEARNING_ENGINE = {
 }
 
 # API Keys & Models (set these in environment variables)
+API_KEY = os.getenv('API_KEY', '')
+MODEL = os.getenv('MODEL', '')
+
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
@@ -2740,89 +2679,89 @@ __all__ = [
 ================================================
 FILE: backend/learning_engine/adaptive_flow.py
 ================================================
-Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x90 in position 1319: character maps to <undefined>
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x90 in position 1445: character maps to <undefined>
 
 
 ================================================
 FILE: backend/learning_engine/ai_assistant.py
 ================================================
 # learning_engine/ai_assistant.py
+"""
+Adaptive AI Tutor / Assistant powered by centralized OpenRouter integration.
+"""
 
-import google.generativeai as genai
-from django.conf import settings
+import logging
+from .openrouter_client import call_openrouter
 
-
-# Configure Gemini
-genai.configure(api_key=settings.GOOGLE_API_KEY)
-
-model = genai.GenerativeModel("gemini-3-flash-preview")
+logger = logging.getLogger('learning_engine.ai_assistant')
 
 
 def generate_ai_response(question, topic, level, accuracy=None):
     """
-    Core Learning Engine Logic
+    Core Learning Engine Logic - AI Doubt Solver
     """
-
     # Adaptive Level Based on Accuracy (Optional)
     if accuracy is not None:
-        if accuracy < 50:
-            level = "Beginner"
-        elif accuracy < 80:
-            level = "Intermediate"
-        else:
-            level = "Advanced"
+        try:
+            acc_val = float(accuracy)
+            if acc_val < 50:
+                level = "Beginner"
+            elif acc_val < 80:
+                level = "Intermediate"
+            else:
+                level = "Advanced"
+        except (ValueError, TypeError):
+            pass
 
     difficulty_instruction = {
-        "Beginner": "Explain in very simple language using real-life analogy.",
+        "Beginner": "Explain in very simple language using a real-life analogy.",
         "Intermediate": "Explain clearly with one technical example.",
         "Advanced": "Explain deeply with edge cases and complexity."
     }
 
     prompt = f"""
-    You are an adaptive AI tutor.
+You are an adaptive AI tutor.
 
-    Student Level: {level}
-    Topic: {topic}
+Student Level: {level}
+Topic: {topic}
 
-    {difficulty_instruction.get(level)}
+{difficulty_instruction.get(level, 'Explain clearly and step-by-step.')}
 
-    Question: {question}
+Question: {question}
 
-    Only answer if the question is related to academic syllabus.
-    Keep answer under 200 words.
-    """
+Only answer if the question is related to academic syllabus.
+Keep answer under 200 words.
+"""
 
-    response = model.generate_content(prompt)
-
-    return response.text
+    try:
+        return call_openrouter(
+            prompt=prompt,
+            system_prompt="You are an adaptive AI tutor. Provide concise, high-quality explanations.",
+            temperature=0.4,
+            max_tokens=400
+        )
+    except Exception as e:
+        logger.error(f"AI Assistant OpenRouter call failed: {e}")
+        return f"I'm sorry, I could not process your question about {topic} right now. Please try again in a moment."
 
 
 ================================================
 FILE: backend/learning_engine/ai_study_planner.py
 ================================================
 # backend/accounts/ai_planner.py
-import google.generativeai as genai
+import logging
 import os
 import json
 import re
 from datetime import date, timedelta
+from .openrouter_client import call_openrouter, parse_json_from_text
 
-# Configure Gemini
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+logger = logging.getLogger('learning_engine.ai_study_planner')
 
-# List available models (for debugging)
-try:
-    for m in genai.list_models():
-        print(f"Available model: {m.name}")
-except Exception as e:
-    print(f"Error listing models: {e}")
-
-# Use a valid model - gemini-1.5-flash or gemini-1.5-pro
-model = genai.GenerativeModel("gemini-2.0-flash")  # Changed from gemini-2.5-flash
 
 def generate_subtopics(subject, goal, num_topics=8):
     """
-    Generate subtopics for a given subject using Gemini AI
+    Generate subtopics for a given subject using OpenRouter.
     
     Args:
         subject: The subject name (e.g., "Mathematics", "Physics")
@@ -2852,34 +2791,29 @@ def generate_subtopics(subject, goal, num_topics=8):
     """
 
     try:
-        print(f"Generating topics for {subject}...")
-        response = model.generate_content(prompt)
-        
-        # Get the response text
-        response_text = response.text
-        print(f"Raw response: {response_text[:200]}...")  # Debug print
-        
-        # Clean the response - remove markdown code blocks if present
-        cleaned_text = clean_json_response(response_text)
-        
-        # Parse JSON
-        try:
-            topics = json.loads(cleaned_text)
-            if isinstance(topics, list) and len(topics) > 0:
-                print(f"Successfully generated {len(topics)} topics")
-                return topics[:num_topics]  # Ensure we don't exceed requested number
-        except json.JSONDecodeError as e:
-            print(f"JSON decode error: {e}")
-            # Try to extract array using regex as fallback
-            topics = extract_topics_from_text(response_text)
-            if topics:
-                return topics[:num_topics]
-        
-        # If all else fails, return default topics
+        raw_text = call_openrouter(
+            prompt=prompt,
+            system_prompt="You are an expert curriculum designer. Output valid JSON array of strings only.",
+            temperature=0.3,
+            max_tokens=400
+        )
+        parsed = parse_json_from_text(raw_text)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            cleaned = [str(t).strip() for t in parsed if t and str(t).strip()]
+            if cleaned:
+                return cleaned[:num_topics]
+        elif isinstance(parsed, dict):
+            for val in parsed.values():
+                if isinstance(val, list) and len(val) > 0:
+                    return [str(t).strip() for t in val if t and str(t).strip()][:num_topics]
+
+        topics = extract_topics_from_text(raw_text)
+        if topics:
+            return topics[:num_topics]
+
         return get_default_topics(subject)
-        
     except Exception as e:
-        print(f"Error generating topics: {e}")
+        logger.error(f"OpenRouter error generating study planner topics for {subject}: {e}")
         return get_default_topics(subject)
 
 def clean_json_response(text):
@@ -3936,6 +3870,156 @@ class TeachingAtomState:
 
 
 ================================================
+FILE: backend/learning_engine/openrouter_client.py
+================================================
+# backend/learning_engine/openrouter_client.py
+"""
+Centralized OpenRouter Client for AdaptiveLearning.
+
+Strictly reads API_KEY and MODEL from environment variables / Django settings.
+Zero hardcoded keys or model names.
+Logs original OpenRouter HTTP status and responses for transparent error visibility.
+"""
+
+import json
+import logging
+import os
+import re
+from typing import Any, Dict, List, Optional
+
+import requests
+from django.conf import settings
+
+logger = logging.getLogger('learning_engine.openrouter')
+
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+class OpenRouterError(Exception):
+    """Raised when an OpenRouter API request fails."""
+    pass
+
+
+def get_openrouter_config() -> tuple[str, str]:
+    """Retrieve API_KEY and MODEL from settings / environment."""
+    api_key = getattr(settings, 'API_KEY', '') or os.getenv('API_KEY', '')
+    model = getattr(settings, 'MODEL', '') or os.getenv('MODEL', '')
+    if not api_key:
+        raise OpenRouterError("OpenRouter API_KEY is not configured in environment variables.")
+    if not model:
+        raise OpenRouterError("OpenRouter MODEL is not configured in environment variables.")
+    return api_key, model
+
+
+def call_openrouter(
+    prompt: str,
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
+    timeout: int = 45,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None
+) -> str:
+    """
+    Execute a chat completion call to OpenRouter.
+    Returns the assistant's response string.
+    Raises OpenRouterError on missing credentials or HTTP errors, with full error logging.
+    """
+    if not api_key or not model:
+        env_key, env_model = get_openrouter_config()
+        api_key = api_key or env_key
+        model = model or env_model
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://adaptlearn.local",
+        "X-Title": "AdaptiveLearning"
+    }
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
+
+    try:
+        response = requests.post(
+            OPENROUTER_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=timeout
+        )
+    except requests.exceptions.Timeout as te:
+        logger.error(f"OpenRouter request timed out after {timeout}s: {te}")
+        raise OpenRouterError(f"OpenRouter connection timed out: {te}")
+    except Exception as e:
+        logger.error(f"OpenRouter connection failed: {e}")
+        raise OpenRouterError(f"OpenRouter connection error: {e}")
+
+    if response.status_code != 200:
+        err_body = response.text[:400]
+        logger.error(f"OpenRouter API error [HTTP {response.status_code}]: {err_body}")
+        raise OpenRouterError(f"OpenRouter API returned HTTP {response.status_code}: {err_body}")
+
+    try:
+        data = response.json()
+        content = data['choices'][0]['message']['content'] or ""
+        return content
+    except Exception as e:
+        logger.error(f"Failed to parse OpenRouter JSON response: {e} | Raw: {response.text[:300]}")
+        raise OpenRouterError(f"Failed to parse OpenRouter response: {e}")
+
+
+def parse_json_from_text(raw_text: str) -> Any:
+    """Safely extracts and parses JSON objects/arrays from LLM raw text."""
+    if not raw_text or not raw_text.strip():
+        return None
+
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = [ln.rstrip() for ln in text.splitlines()]
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+
+    # Clean control characters
+    text = re.sub(r'[\x00-\x1f\x7f]', lambda m: ' ' if m.group() in ('\n', '\r', '\t') else '', text)
+
+    # Attempt direct parse
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Extract JSON substring
+    match = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', text)
+    if match:
+        candidate = match.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except Exception:
+            candidate_cleaned = re.sub(r',\s*([\]\}])', r'\1', candidate)
+            try:
+                return json.loads(candidate_cleaned)
+            except Exception:
+                pass
+
+    return None
+
+
+
+================================================
 FILE: backend/learning_engine/pacing_engine.py
 ================================================
 Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x90 in position 1045: character maps to <undefined>
@@ -3946,21 +4030,19 @@ FILE: backend/learning_engine/question_generator.py
 ================================================
 # backend/learning_engine/question_generator.py
 """
-Question Generator for AdaptiveLearning.
+Centralized Question Generation Service for AdaptiveLearning.
 
-Multi-Provider Architecture:
-1. Primary Provider: Groq (default model: llama-3.1-8b-instant, configurable via GROQ_MODEL).
-2. Fallback Provider: Google Gemini (default model: gemini-2.5-flash, configurable via GEMINI_MODEL).
-3. Provider Sequence: Groq (max 2 attempts) -> Gemini (max 2 attempts) -> controlled HTTP 503.
-4. Smart Error Classification: Permanent errors (404 model_not_found, 401/403 auth) immediately
-   switch to Gemini without wasted retries. Transient errors receive 1 retry before fallback.
-5. Missing Question Handoff: If Groq produces a partial set of valid novel questions, Gemini
-   is prompted only for the remaining missing questions.
-6. Zero Static Fallback: Deterministic static question generation is completely eliminated.
-7. Backend Option Shuffling & Balancing: Programmatically randomizes option positions across
-   A, B, C, D to permanently eliminate Option A bias while strictly preserving correct_index mapping.
-8. Shared Strict Validation & Lightweight Deduplication: Both providers pass through the exact
-   same candidate validation and Jaccard/SequenceMatcher novelty gating.
+Architecture:
+1. Provider: OpenRouter (OpenAI-compatible API at https://openrouter.ai/api/v1).
+2. Configuration: Strictly reads API_KEY and MODEL from environment variables / Django settings.
+3. Candidate Batching: Generates N + 1 candidates in 1 request for N needed questions.
+4. Bounded Retries: At most 2 generation attempts with strict fail-fast error handling.
+5. Novelty Gate: Pure-Python Jaccard and SequenceMatcher similarity detection against
+   session history and intra-batch candidates. No local transformer models loaded.
+6. Option Shuffling & Balancing: Programmatically randomizes option positions across
+   A, B, C, D to permanently eliminate Option A bias while strictly preserving correct answer mapping.
+7. Strict Candidate Validation: Missing or invalid correct answers are rejected (never defaulted to 0).
+8. Zero Static Question Fallback: Deterministic static question templates are completely eliminated.
 """
 
 import difflib
@@ -3971,10 +4053,9 @@ import random
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+import requests
 from django.conf import settings
-from google import genai
-from google.genai import types as genai_types
-from groq import Groq
+from .openrouter_client import call_openrouter, parse_json_from_text
 
 # Structured logger for question generation pipeline
 logger = logging.getLogger('learning_engine.question_generator')
@@ -3991,14 +4072,16 @@ class QuestionGenerationError(Exception):
 # =====================================================================
 # Configuration Constants
 # =====================================================================
+
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
 # Threshold above which two questions are considered duplicates (0.0 to 1.0)
 QUESTION_SIMILARITY_THRESHOLD = 0.72
 
-# Bounded provider attempts
-GROQ_MAX_ATTEMPTS = 2
-GEMINI_MAX_ATTEMPTS = 2
+# Maximum bounded generation attempts
+MAX_GENERATION_ATTEMPTS = 2
 
-# Moderate generation temperature for controlled creativity and diversity
+# Generation temperature for controlled creativity and diversity
 DEFAULT_GENERATION_TEMPERATURE = 0.7
 
 # Common stopwords to ignore when comparing semantic content
@@ -4127,18 +4210,22 @@ def is_novel_question(
     return True, max_sim, most_similar
 
 
+# =====================================================================
+# Strict Validation and Sanitization
+# =====================================================================
+
 def _validate_single_question(q: Any) -> Optional[Dict]:
     """
     Strict validation and sanitization for a single candidate question.
     Returns the sanitized dict if valid, or None if invalid.
-    Rejects candidate if correct_index is invalid or missing (NEVER defaults to 0).
+    Rejects candidate if correct answer or options are invalid (NEVER defaults to 0).
     """
     if not isinstance(q, dict):
         return None
 
     question_text = str(q.get('question', '')).strip()
     word_count = len(question_text.split())
-    if not question_text or word_count < 4 or word_count > 60:
+    if not question_text or word_count < 3 or word_count > 70:
         return None
 
     opts = q.get('options')
@@ -4151,17 +4238,29 @@ def _validate_single_question(q: Any) -> Optional[Dict]:
     if len(set(cleaned_opts)) != 4:
         return None  # Rejects duplicate options within the same question
 
-    ci = q.get('correct_index')
-    if ci is None:
-        return None
+    # Determine correct option index
+    ci_int = None
+    if 'correct_index' in q and q['correct_index'] is not None:
+        try:
+            val = int(q['correct_index'])
+            if val in (0, 1, 2, 3):
+                ci_int = val
+        except (TypeError, ValueError):
+            pass
 
-    try:
-        ci_int = int(ci)
-    except (TypeError, ValueError):
-        return None
+    # If correct_index not given or invalid, attempt resolution via correct_answer text or letter
+    if ci_int is None and 'correct_answer' in q and q['correct_answer']:
+        ca_raw = str(q['correct_answer']).strip()
+        # Direct string match with an option
+        if ca_raw in cleaned_opts:
+            ci_int = cleaned_opts.index(ca_raw)
+        elif ca_raw.upper() in ('A', 'B', 'C', 'D'):
+            ci_int = {'A': 0, 'B': 1, 'C': 2, 'D': 3}[ca_raw.upper()]
+        elif ca_raw.isdigit() and int(ca_raw) in (0, 1, 2, 3):
+            ci_int = int(ca_raw)
 
-    if ci_int not in (0, 1, 2, 3):
-        return None
+    if ci_int is None or ci_int not in (0, 1, 2, 3):
+        return None  # Strictly rejected!
 
     diff = str(q.get('difficulty', 'medium')).lower()
     if diff not in ('easy', 'medium', 'hard'):
@@ -4185,7 +4284,8 @@ def _validate_single_question(q: Any) -> Optional[Dict]:
         'estimated_time': est_time,
         'question': question_text,
         'options': cleaned_opts,
-        'correct_index': ci_int
+        'correct_index': ci_int,
+        'explanation': str(q.get('explanation', '')).strip()
     }
 
 
@@ -4224,7 +4324,7 @@ def shuffle_and_balance_options(questions: List[Dict]) -> List[Dict]:
         incorrect_options = [opt for idx, opt in enumerate(orig_options) if idx != orig_ci]
         random.shuffle(incorrect_options)
 
-        # Place correct_text at target_ci, and incorrect_options in the remaining 3 slots
+        # Place correct_text at target_ci, and incorrect_options in remaining 3 slots
         new_options = [None] * 4
         new_options[target_ci] = correct_text
 
@@ -4238,6 +4338,7 @@ def shuffle_and_balance_options(questions: List[Dict]) -> List[Dict]:
         q_copy = dict(q)
         q_copy['options'] = new_options
         q_copy['correct_index'] = target_ci
+        q_copy['correct_answer'] = correct_text
 
         # Verification assertion to guarantee integrity
         assert q_copy['options'][q_copy['correct_index']] == correct_text, "Option shuffle corrupted correct_index mapping!"
@@ -4247,27 +4348,8 @@ def shuffle_and_balance_options(questions: List[Dict]) -> List[Dict]:
 
 
 # =====================================================================
-# AI Provider Abstraction
+# Robust JSON Parsing
 # =====================================================================
-
-class BaseQuestionProvider:
-    """Base interface for question generation AI providers."""
-    provider_name: str = "Base"
-    model_name: str = ""
-
-    def is_permanent_error(self, err: Exception) -> bool:
-        """Return True if error should not be retried on this provider."""
-        return False
-
-    def generate_candidate_questions(
-        self,
-        prompt: str,
-        needed_count: int,
-        temperature: float = DEFAULT_GENERATION_TEMPERATURE
-    ) -> List[Dict]:
-        """Generate raw candidate question dicts from AI."""
-        raise NotImplementedError
-
 
 def safe_parse_json_questions(raw_text: str) -> List[Dict]:
     """Robust parser for LLM JSON outputs handling markdown fences, trailing commas, truncation, and formatting variations."""
@@ -4335,24 +4417,52 @@ def safe_parse_json_questions(raw_text: str) -> List[Dict]:
             except Exception:
                 pass
 
-    logger.warning(f"safe_parse_json_questions failed to parse raw text ({len(raw_text)} chars): {repr(raw_text)}")
     return []
 
 
-class GroqQuestionProvider(BaseQuestionProvider):
-    """Primary question provider using Groq API."""
-    provider_name: str = "Groq"
+# =====================================================================
+# OpenRouter Question Provider
+# =====================================================================
+
+class BaseQuestionProvider:
+    """Base interface for question generation AI providers."""
+    provider_name: str = "Base"
+    model_name: str = ""
+
+    def is_permanent_error(self, err: Exception) -> bool:
+        return False
+
+    def generate_candidate_questions(
+        self,
+        prompt: str,
+        needed_count: int,
+        temperature: float = DEFAULT_GENERATION_TEMPERATURE
+    ) -> List[Dict]:
+        raise NotImplementedError
+
+
+class OpenRouterQuestionProvider(BaseQuestionProvider):
+    """Primary question provider using OpenRouter (OpenAI-compatible REST API)."""
+    provider_name: str = "OpenRouter"
 
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
-        self.api_key = api_key or getattr(settings, 'GROQ_API_KEY', '') or os.getenv('GROQ_API_KEY', '')
-        self.model_name = model_name or getattr(settings, 'GROQ_MODEL', '') or os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant')
-        self.client = Groq(api_key=self.api_key) if self.api_key else None
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = getattr(settings, 'API_KEY', '') or os.getenv('API_KEY', '')
+
+        if model_name is not None:
+            self.model_name = model_name
+        else:
+            self.model_name = getattr(settings, 'MODEL', '') or os.getenv('MODEL', '')
 
     def is_permanent_error(self, err: Exception) -> bool:
         err_str = str(err).lower()
-        if "model_not_found" in err_str or "does not exist" in err_str or "404" in err_str:
+        if "401" in err_str or "403" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
             return True
-        if "invalid_api_key" in err_str or "authentication" in err_str or "401" in err_str or "403" in err_str:
+        if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str or "not found" in err_str:
+            return True
+        if "429" in err_str or "quota" in err_str or "rate limit" in err_str or "resource_exhausted" in err_str:
             return True
         return False
 
@@ -4362,87 +4472,80 @@ class GroqQuestionProvider(BaseQuestionProvider):
         needed_count: int,
         temperature: float = DEFAULT_GENERATION_TEMPERATURE
     ) -> List[Dict]:
-        if not self.client:
-            raise QuestionGenerationError("Groq client is not configured (missing GROQ_API_KEY).")
+        if not self.api_key:
+            raise QuestionGenerationError("OpenRouter API_KEY is not configured in environment variables.")
+        if not self.model_name:
+            raise QuestionGenerationError("OpenRouter MODEL is not configured in environment variables.")
 
-        max_tokens = min(4096, max(2048, 1024 * needed_count))
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"}
-        )
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://adaptlearn.local",
+            "X-Title": "AdaptiveLearning"
+        }
 
-        raw_text = response.choices[0].message.content or ""
-        return safe_parse_json_questions(raw_text)
+        # Request N + 1 candidates for N needed questions to minimize roundtrips
+        candidate_count = needed_count + 1
+        max_tokens = min(4096, max(1500, 750 * candidate_count))
 
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a professional educational assessment engine. Generate multiple-choice questions in strict JSON format only."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
 
-class GeminiQuestionProvider(BaseQuestionProvider):
-    """Fallback question provider using Google Gemini API."""
-    provider_name: str = "Gemini"
-
-    def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
-        self.api_key = (
-            api_key or
-            getattr(settings, 'GEMINI_API_KEY', '') or
-            getattr(settings, 'GOOGLE_API_KEY', '') or
-            os.getenv('GEMINI_API_KEY', '') or
-            os.getenv('GOOGLE_API_KEY', '')
-        )
-        self.model_name = model_name or getattr(settings, 'GEMINI_MODEL', '') or os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
-        self.client = genai.Client(api_key=self.api_key) if self.api_key else None
-
-    def is_permanent_error(self, err: Exception) -> bool:
-        err_str = str(err).lower()
-        if "not_found" in err_str or "404" in err_str or "no longer available" in err_str:
-            return True
-        if "api_key_invalid" in err_str or "permission_denied" in err_str or "401" in err_str or "403" in err_str:
-            return True
-        return False
-
-    def generate_candidate_questions(
-        self,
-        prompt: str,
-        needed_count: int,
-        temperature: float = DEFAULT_GENERATION_TEMPERATURE
-    ) -> List[Dict]:
-        if not self.client:
-            raise QuestionGenerationError("Gemini client is not configured (missing GEMINI_API_KEY / GOOGLE_API_KEY).")
-
-        max_tokens = min(4096, max(2048, 1024 * needed_count))
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=temperature,
-                max_output_tokens=max_tokens,
+        try:
+            response = requests.post(
+                OPENROUTER_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=45
             )
-        )
+        except requests.exceptions.Timeout as te:
+            logger.warning("OpenRouter request timed out.")
+            raise Exception(f"OpenRouter connection timed out: {te}")
+        except Exception as e:
+            logger.warning(f"OpenRouter connection failed: {e}")
+            raise Exception(f"OpenRouter connection error: {e}")
 
-        raw_text = response.text or ""
+        if response.status_code != 200:
+            err_msg = f"OpenRouter API returned HTTP {response.status_code}: {response.text[:300]}"
+            logger.warning(err_msg)
+            raise Exception(err_msg)
+
+        try:
+            res_json = response.json()
+            raw_text = res_json['choices'][0]['message']['content'] or ""
+        except Exception as e:
+            logger.warning(f"Failed to extract message content from OpenRouter response: {e}")
+            raw_text = response.text or ""
+
         return safe_parse_json_questions(raw_text)
 
 
 # =====================================================================
-# Main QuestionGenerator Class (Multi-Provider Orchestration)
+# Main QuestionGenerator Class (Centralized Orchestrator)
 # =====================================================================
 
 class QuestionGenerator:
-    """Orchestrates multi-provider question generation (Groq Primary -> Gemini Fallback)."""
+    """Centralized orchestrator for question generation using OpenRouter."""
 
-    def __init__(
-        self,
-        groq_provider: Optional[GroqQuestionProvider] = None,
-        gemini_provider: Optional[GeminiQuestionProvider] = None
-    ):
-        self.groq_provider = groq_provider or GroqQuestionProvider()
-        self.gemini_provider = gemini_provider or GeminiQuestionProvider()
+    def __init__(self, provider: Optional[OpenRouterQuestionProvider] = None):
+        self.provider = provider or OpenRouterQuestionProvider()
 
     @staticmethod
     def _validate_questions(questions: list) -> list:
-        """Validate and sanitize AI-generated questions list."""
+        """Validate and sanitize candidate questions list."""
         validated = []
         for q in questions:
             sanitized = _validate_single_question(q)
@@ -4450,7 +4553,7 @@ class QuestionGenerator:
                 validated.append(sanitized)
         return validated
 
-    def _execute_multi_provider_pipeline(
+    def _execute_generation_pipeline(
         self,
         build_prompt_fn,
         total_needed: int,
@@ -4460,11 +4563,11 @@ class QuestionGenerator:
         history_pool: List[Union[Dict, str]]
     ) -> List[Dict]:
         """
-        Generic multi-provider execution engine:
-        1. Try Groq provider (up to GROQ_MAX_ATTEMPTS).
-        2. If Groq encounters permanent error, immediately switch to Gemini.
-        3. If Groq produces fewer than total_needed, call Gemini for remaining count.
-        4. Try Gemini provider (up to GEMINI_MAX_ATTEMPTS).
+        Generic OpenRouter generation engine:
+        1. Attempt 1: Request N + 1 candidate batch from OpenRouter.
+        2. Validate candidate structures strictly (reject invalid correct_index/answer).
+        3. Filter duplicate candidates via NOVELTY_GATE against session history & batch.
+        4. If fewer than total_needed, execute Attempt 2 for remaining count + 1.
         5. If still fewer than total_needed, raise QuestionGenerationError (NO static fallback).
         6. Apply backend option shuffling & balancing across A/B/C/D.
         """
@@ -4473,23 +4576,47 @@ class QuestionGenerator:
         remaining_medium = need_medium
         remaining_hard = need_hard
 
-        def _process_candidates(candidates: List[Dict], provider_name: str):
-            nonlocal remaining_easy, remaining_medium, remaining_hard
+        logger.info(f"Question generation started. Provider=OpenRouter, Model={self.provider.model_name}")
+
+        for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
+            needed_now = total_needed - len(accepted_questions)
+            if needed_now <= 0:
+                break
+
+            logger.info(f"OpenRouter Attempt {attempt}/{MAX_GENERATION_ATTEMPTS} requesting {needed_now} needed question(s)")
+            prompt = build_prompt_fn(needed_now, remaining_easy, remaining_medium, remaining_hard, history_pool)
+
+            try:
+                candidates = self.provider.generate_candidate_questions(
+                    prompt=prompt,
+                    needed_count=needed_now,
+                    temperature=DEFAULT_GENERATION_TEMPERATURE
+                )
+            except Exception as e:
+                is_perm = self.provider.is_permanent_error(e)
+                logger.warning(f"OpenRouter generation attempt {attempt} failed: {e} (permanent={is_perm})")
+                if is_perm:
+                    logger.error("OpenRouter encountered permanent error; terminating generation pipeline.")
+                    break
+                if attempt == MAX_GENERATION_ATTEMPTS:
+                    logger.error("OpenRouter exhausted retries.")
+                continue
+
             for candidate in candidates:
                 sanitized = _validate_single_question(candidate)
                 if not sanitized:
-                    logger.warning(f"QUALITY_GATE [{provider_name}]: Candidate rejected due to schema/validation failure: {candidate}")
+                    logger.warning("QUALITY_GATE [OpenRouter]: Candidate rejected due to schema/validation failure.")
                     continue
 
                 is_novel, sim_score, matched_q = is_novel_question(sanitized, history_pool)
                 if not is_novel:
                     logger.info(
-                        f"NOVELTY_GATE [{provider_name}]: Duplicate rejected (sim={sim_score:.3f} >= {QUESTION_SIMILARITY_THRESHOLD}) "
+                        f"NOVELTY_GATE [OpenRouter]: Duplicate rejected (sim={sim_score:.3f} >= {QUESTION_SIMILARITY_THRESHOLD}) "
                         f"matched: '{matched_q}' | candidate: '{sanitized['question']}'"
                     )
                     continue
 
-                logger.info(f"NOVELTY_GATE [{provider_name}]: Accepted novel candidate (max_sim={sim_score:.3f}): '{sanitized['question']}'")
+                logger.info(f"NOVELTY_GATE [OpenRouter]: Accepted novel candidate (max_sim={sim_score:.3f}): '{sanitized['question']}'")
                 accepted_questions.append(sanitized)
                 history_pool.append(sanitized)
 
@@ -4508,79 +4635,17 @@ class QuestionGenerator:
                 if len(accepted_questions) >= total_needed:
                     break
 
-        # ==========================================
-        # Phase 1: Primary Provider (Groq)
-        # ==========================================
-        logger.info(f"Question generation started. Provider=Groq, Model={self.groq_provider.model_name}")
-        for attempt in range(1, GROQ_MAX_ATTEMPTS + 1):
-            needed_now = total_needed - len(accepted_questions)
-            if needed_now <= 0:
+            if len(accepted_questions) >= total_needed:
+                logger.info(f"OpenRouter generation succeeded on attempt {attempt}. Accepted: {len(accepted_questions)}/{total_needed}")
                 break
 
-            logger.info(f"Groq Attempt {attempt}/{GROQ_MAX_ATTEMPTS} requesting {needed_now} question(s)")
-            prompt = build_prompt_fn(needed_now, remaining_easy, remaining_medium, remaining_hard, history_pool)
-
-            try:
-                candidates = self.groq_provider.generate_candidate_questions(
-                    prompt=prompt,
-                    needed_count=needed_now,
-                    temperature=DEFAULT_GENERATION_TEMPERATURE
-                )
-                _process_candidates(candidates, "Groq")
-                if len(accepted_questions) >= total_needed:
-                    logger.info(f"Groq generation succeeded. Accepted: {len(accepted_questions)}/{total_needed}")
-                    break
-            except Exception as e:
-                is_perm = self.groq_provider.is_permanent_error(e)
-                logger.warning(f"Groq generation attempt {attempt} failed: {e} (permanent={is_perm})")
-                if is_perm:
-                    logger.info("Groq encountered permanent error; immediately switching to Gemini fallback.")
-                    break
-                if attempt == GROQ_MAX_ATTEMPTS:
-                    logger.info("Groq exhausted retries; switching to Gemini fallback.")
-
-        # ==========================================
-        # Phase 2: Fallback Provider (Gemini)
-        # ==========================================
-        if len(accepted_questions) < total_needed:
-            missing_count = total_needed - len(accepted_questions)
-            logger.info(f"Switching provider: Gemini (Model={self.gemini_provider.model_name}) for {missing_count} missing question(s)")
-
-            for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
-                needed_now = total_needed - len(accepted_questions)
-                if needed_now <= 0:
-                    break
-
-                logger.info(f"Gemini Attempt {attempt}/{GEMINI_MAX_ATTEMPTS} requesting {needed_now} question(s)")
-                prompt = build_prompt_fn(needed_now, remaining_easy, remaining_medium, remaining_hard, history_pool)
-
-                try:
-                    candidates = self.gemini_provider.generate_candidate_questions(
-                        prompt=prompt,
-                        needed_count=needed_now,
-                        temperature=DEFAULT_GENERATION_TEMPERATURE
-                    )
-                    _process_candidates(candidates, "Gemini")
-                    if len(accepted_questions) >= total_needed:
-                        logger.info(f"Gemini generation succeeded. Accepted: {len(accepted_questions)}/{total_needed}")
-                        break
-                except Exception as e:
-                    is_perm = self.gemini_provider.is_permanent_error(e)
-                    logger.warning(f"Gemini generation attempt {attempt} failed: {e} (permanent={is_perm})")
-                    if is_perm:
-                        logger.error("Gemini encountered permanent error; terminating generation pipeline.")
-                        break
-
-        # ==========================================
-        # Phase 3: Evaluation & Shuffling (No Static Fallback)
-        # ==========================================
         if len(accepted_questions) < total_needed:
             logger.error(
-                f"Both Groq and Gemini failed to produce {total_needed} questions. "
+                f"OpenRouter failed to produce {total_needed} questions. "
                 f"Generated only {len(accepted_questions)}/{total_needed}. Raising QuestionGenerationError."
             )
             raise QuestionGenerationError(
-                f"Question generation failed after trying Groq and Gemini. Produced {len(accepted_questions)}/{total_needed}."
+                f"Question generation failed. Produced {len(accepted_questions)}/{total_needed}."
             )
 
         final_batch = accepted_questions[:total_needed]
@@ -4601,7 +4666,7 @@ class QuestionGenerator:
         previous_questions: Optional[List[Union[Dict, str]]] = None
     ) -> List[Dict]:
         """
-        Generate novel assessment questions based on teaching content using Groq -> Gemini fallback.
+        Generate novel assessment questions based on teaching content using OpenRouter.
         """
         total_needed = need_easy + need_medium + need_hard
         if total_needed <= 0:
@@ -4614,6 +4679,8 @@ class QuestionGenerator:
         examples_text = "\n".join([f"- {ex}" for ex in examples if ex])
 
         def build_teaching_prompt(needed_count: int, rem_easy: int, rem_med: int, rem_hard: int, pool: List[Union[Dict, str]]) -> str:
+            # Request N + 1 candidates to ensure quota efficiency
+            candidate_target = needed_count + 1
             recent_history = pool[-10:]
             history_lines = []
             for idx, q in enumerate(recent_history, start=1):
@@ -4636,7 +4703,7 @@ The new question must differ conceptually from all previous questions supplied a
 """
 
             return f"""
-You are an experienced teacher creating conceptual assessment questions to evaluate deep student understanding.
+You are an experienced educator creating conceptual assessment questions to evaluate deep student understanding.
 
 Subject: {subject}
 Concept: {concept}
@@ -4656,12 +4723,10 @@ Examples/Applications:
 {history_section}
 
 TASK:
-Generate EXACTLY {needed_count} multiple-choice question(s) testing conceptual understanding of "{atom}".
+Generate EXACTLY {candidate_target} distinct multiple-choice question candidates testing conceptual understanding of "{atom}".
 
-DIFFICULTY REQUIREMENTS:
-- Easy count: {rem_easy}
-- Medium count: {rem_med}
-- Hard count: {rem_hard}
+DIFFICULTY GUIDELINES:
+- Aim for {rem_easy} Easy, {rem_med} Medium, {rem_hard} Hard questions.
 
 CRITICAL RULES:
 1. Ground every question strictly in the provided teaching content.
@@ -4676,7 +4741,7 @@ CRITICAL RULES:
    - Troubleshooting / system behavior
 5. Question length: 14 to 40 words.
 6. Exactly 4 plausible, believable options.
-7. Exactly one correct option. "correct_index" MUST be an integer (0, 1, 2, or 3) indicating which option is correct.
+7. Exactly one correct option. "correct_answer" MUST match the exact text of the correct option.
 8. Output STRICT JSON ONLY matching the schema.
 
 OUTPUT FORMAT:
@@ -4688,18 +4753,19 @@ OUTPUT FORMAT:
             "estimated_time": 45,
             "question": "Question text here?",
             "options": [
-                "Option A",
-                "Option B",
-                "Option C",
-                "Option D"
+                "Option 1",
+                "Option 2",
+                "Option 3",
+                "Option 4"
             ],
-            "correct_index": 0
+            "correct_answer": "Option 2",
+            "explanation": "Why this option is correct."
         }}
     ]
 }}
 """
 
-        return self._execute_multi_provider_pipeline(
+        return self._execute_generation_pipeline(
             build_prompt_fn=build_teaching_prompt,
             total_needed=total_needed,
             need_easy=need_easy,
@@ -4720,7 +4786,7 @@ OUTPUT FORMAT:
         previous_questions: Optional[List[Union[Dict, str]]] = None
     ) -> List[Dict]:
         """
-        Generate questions for an atom with dynamic difficulty using Groq -> Gemini fallback.
+        Generate questions for an atom with dynamic difficulty using OpenRouter.
         """
         if count <= 0:
             return []
@@ -4750,13 +4816,14 @@ OUTPUT FORMAT:
             error_context = f"\nFocus on addressing these common errors: {', '.join(error_focus)}\n"
 
         def build_dynamic_prompt(needed_count: int, rem_easy: int, rem_med: int, rem_hard: int, pool: List[Union[Dict, str]]) -> str:
+            candidate_target = needed_count + 1
             history_lines = [f"- {q.get('question', str(q))}" for q in pool[-10:] if str(q).strip()]
             history_sec = ""
             if history_lines:
                 history_sec = f"PREVIOUS QUESTIONS (DO NOT DUPLICATE):\n" + "\n".join(history_lines) + "\n"
 
             return f"""
-You are an experienced teacher creating conceptual assessment questions to evaluate deep student understanding.
+You are an experienced educator creating conceptual assessment questions to evaluate deep student understanding.
 
 Subject: {subject}
 Concept: {concept}
@@ -4764,7 +4831,7 @@ Atomic Concept: {atom}
 Student Level: {knowledge_level.upper()}
 Target Difficulty: {target_difficulty.upper()}
 
-Generate EXACTLY {needed_count} {target_difficulty} question(s) with these characteristics:
+Generate EXACTLY {candidate_target} distinct {target_difficulty} question(s) with these characteristics:
 - Complexity: {adj['complexity']}
 - Cognitive levels: {', '.join(allowed_cognitive)}
 - Hint level: {adj['hint_level']}
@@ -4776,7 +4843,7 @@ CRITICAL QUALITY REQUIREMENTS:
 - Test CONCEPTUAL UNDERSTANDING, application, or reasoning â€” NOT simple definition recall.
 - Avoid obvious or trivial keyword matching.
 - Each question must have exactly 4 plausible options in the same conceptual category.
-- Exactly one correct option. "correct_index" must be an integer (0, 1, 2, or 3).
+- Exactly one correct option. "correct_answer" must match the exact string of the correct option.
 - Output STRICT JSON ONLY.
 
 OUTPUT FORMAT:
@@ -4787,14 +4854,15 @@ OUTPUT FORMAT:
             "cognitive_operation": "{allowed_cognitive[0]}",
             "estimated_time": 45,
             "question": "Question text here?",
-            "options": ["Option A", "Option B", "Option C", "Option D"],
-            "correct_index": 0
+            "options": ["Option 1", "Option 2", "Option 3", "Option 4"],
+            "correct_answer": "Option 1",
+            "explanation": "Why this option is correct."
         }}
     ]
 }}
 """
 
-        return self._execute_multi_provider_pipeline(
+        return self._execute_generation_pipeline(
             build_prompt_fn=build_dynamic_prompt,
             total_needed=count,
             need_easy=easy_c,
@@ -4811,7 +4879,7 @@ OUTPUT FORMAT:
         count: int = 5,
         previous_questions: Optional[List[Union[Dict, str]]] = None
     ) -> List[Dict]:
-        """Diagnostic quiz based on subject/concept/knowledge level with Groq -> Gemini fallback."""
+        """Diagnostic quiz based on subject/concept/knowledge level using OpenRouter."""
         easy_count = max(1, count // 2)
         medium_count = max(0, count - easy_count)
 
@@ -4840,89 +4908,56 @@ OUTPUT FORMAT:
         return questions
 
     def generate_atoms(self, subject: str, concept: str) -> List[str]:
-        """Generate atomic concepts using Gemini."""
-        client = getattr(self.gemini_provider, 'client', None)
-        if not client:
-            logger.info("Gemini client not available, using fallback atoms")
-            return self._get_fallback_atoms(subject, concept)
+        """Generate atomic concepts using OpenRouter. Returns empty list on failure so 503 is returned."""
+        if not self.provider.api_key or not self.provider.model_name:
+            raise QuestionGenerationError("OpenRouter API_KEY or MODEL is not configured.")
 
         prompt = f"""
-        You are a master curriculum designer and senior educator with over 30 years of classroom teaching experience, specializing in breaking down subjects into precise, teachable, and assessable atomic learning units.
+You are an expert curriculum designer breaking down concepts into atomic learning units.
+Subject: {subject}
+Concept: {concept}
 
-        Your task is to generate atomic sub-concepts ("atoms") for curriculum design.
+Generate EXACTLY 4 to 6 atomic sub-concepts ("atoms").
+Each atom must be a noun or noun phrase (maximum 4 words).
 
-        Subject: {subject}
-        Concept: {concept}
-
-        Your atoms must reflect how an expert teacher would naturally divide this concept for step-by-step teaching, assessment, and mastery tracking in a real classroom.
-
-        PEDAGOGICAL REQUIREMENTS:
-        1. Each atom must represent ONE distinct, teachable knowledge unit that can be:
-        * Explained independently
-        * Taught in a short lesson (5â€“15 minutes)
-        * Assessed with 1â€“3 focused questions
-
-        2. All atoms must be at the SAME pedagogical level:
-        * Do NOT mix beginner and advanced units
-        * Do NOT mix theory and applications
-
-        3. Atoms must be mutually exclusive (no overlap).
-        4. Generate EXACTLY 4 to 6 atoms.
-        5. Each atom must be a noun or noun phrase (maximum 4 words).
-
-        Output STRICT JSON only:
-        {{
-        "atoms": [
+Output STRICT JSON only:
+{{
+    "atoms": [
         "Atom 1",
         "Atom 2",
         "Atom 3",
         "Atom 4"
-        ]
-        }}
-        """
-
+    ]
+}}
+"""
         try:
-            response = client.models.generate_content(
-                model=self.gemini_provider.model_name,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(response_mime_type="application/json")
+            raw = call_openrouter(
+                prompt=prompt,
+                system_prompt="You are an expert curriculum designer. Output valid JSON only.",
+                temperature=0.3,
+                max_tokens=400,
+                api_key=self.provider.api_key,
+                model=self.provider.model_name
             )
-            raw = response.text or ""
-            if "```" in raw:
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            parsed = json.loads(raw.strip())
-            atoms = parsed.get("atoms", [])
-            if len(atoms) < 4 or len(atoms) > 6:
-                return self._get_fallback_atoms(subject, concept)
-            return atoms
+            parsed = parse_json_from_text(raw)
+            if isinstance(parsed, dict):
+                atoms = parsed.get("atoms", [])
+            elif isinstance(parsed, list):
+                atoms = parsed
+            else:
+                atoms = []
+
+            cleaned_atoms = [str(a).strip() for a in atoms if a and str(a).strip()]
+            if len(cleaned_atoms) >= 3:
+                return cleaned_atoms[:6]
+            logger.error(f"OpenRouter returned invalid atoms payload: {raw[:200]}")
+            return []
         except Exception as e:
-            logger.error(f"Error generating atoms via Gemini: {e}")
-            return self._get_fallback_atoms(subject, concept)
-
-    def _get_fallback_atoms(self, subject: str, concept: str) -> List[str]:
-        """Provide fallback curriculum atoms when AI atom generation fails."""
-        fallbacks = {
-            "Memory Organization": ["Address Space", "Memory Hierarchy", "Cache Memory", "RAM vs ROM", "Memory Mapping"],
-            "Address Space": ["Address Lines", "Memory Locations", "Address Decoding", "Word Size", "Byte Addressing"],
-            "Cache Memory": ["Cache Levels", "Cache Hit/Miss", "Cache Mapping", "Replacement Policy", "Write Policy"],
-            "Arrays": ["Array Declaration", "Index Access", "Contiguous Memory", "Insertion and Deletion", "Traversal"]
-        }
-        for key, atoms in fallbacks.items():
-            if key.lower() in concept.lower():
-                return atoms
-
-        return [
-            f"{concept} Basics",
-            f"{concept} Structure",
-            f"{concept} Operations",
-            f"{concept} Applications",
-            f"{concept} Limitations"
-        ]
+            logger.error(f"OpenRouter atom generation failed for {concept} in {subject}: {e}")
+            return []
 
     def generate_concept_overview(self, subject: str, concept: str, atoms: List[str]) -> Dict:
-        """Generate overview for zero-knowledge students."""
+        """Generate overview for zero-knowledge students using OpenRouter."""
         atoms_text = "\n".join([f"  {i+1}. {a}" for i, a in enumerate(atoms)])
 
         prompt = f"""
@@ -4949,36 +4984,21 @@ Return STRICT JSON only.
   "encouragement": "..."
 }}
 """
-        # Try Groq first, then Gemini
-        for provider in [self.groq_provider, self.gemini_provider]:
-            if not getattr(provider, 'client', None):
-                continue
+        if self.provider.api_key and self.provider.model_name:
             try:
-                if isinstance(provider, GroqQuestionProvider):
-                    resp = provider.client.chat.completions.create(
-                        model=provider.model_name,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.4,
-                        max_tokens=1024,
-                        response_format={"type": "json_object"}
-                    )
-                    raw = resp.choices[0].message.content or ""
-                else:
-                    resp = provider.client.models.generate_content(
-                        model=provider.model_name,
-                        contents=prompt,
-                        config=genai_types.GenerateContentConfig(response_mime_type="application/json")
-                    )
-                    raw = resp.text or ""
-
-                if "```" in raw:
-                    raw = raw.split("```")[1]
-                    if raw.startswith("json"):
-                        raw = raw[4:]
-                raw = re.sub(r'[\x00-\x1f\x7f]', lambda m: ' ' if m.group() in ('\n', '\r', '\t') else '', raw)
-                return json.loads(raw.strip())
+                raw = call_openrouter(
+                    prompt=prompt,
+                    system_prompt="You are an expert tutor. Output valid JSON only.",
+                    temperature=0.3,
+                    max_tokens=600,
+                    api_key=self.provider.api_key,
+                    model=self.provider.model_name
+                )
+                parsed = parse_json_from_text(raw)
+                if isinstance(parsed, dict) and "overview" in parsed:
+                    return parsed
             except Exception as e:
-                logger.warning(f"Error in generate_concept_overview with {provider.provider_name}: {e}")
+                logger.error(f"Error in generate_concept_overview with OpenRouter: {e}")
 
         return {
             "overview": f"{concept} is a fundamental topic in {subject}. It covers several important ideas that build on each other.",
@@ -4997,7 +5017,7 @@ Return STRICT JSON only.
         mastery_score: float,
         error_types: List[str] = None
     ) -> Dict:
-        """Generate concise summary after atom completion."""
+        """Generate concise summary after atom completion using OpenRouter."""
         explanation = teaching_content.get('explanation', '') if teaching_content else ''
         analogy = teaching_content.get('analogy', '') if teaching_content else ''
 
@@ -5032,35 +5052,21 @@ Generate a concise review summary as JSON:
 
 Return STRICT JSON only.
 """
-        for provider in [self.groq_provider, self.gemini_provider]:
-            if not getattr(provider, 'client', None):
-                continue
+        if self.provider.api_key and self.provider.model_name:
             try:
-                if isinstance(provider, GroqQuestionProvider):
-                    resp = provider.client.chat.completions.create(
-                        model=provider.model_name,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.3,
-                        max_tokens=800,
-                        response_format={"type": "json_object"}
-                    )
-                    raw = resp.choices[0].message.content or ""
-                else:
-                    resp = provider.client.models.generate_content(
-                        model=provider.model_name,
-                        contents=prompt,
-                        config=genai_types.GenerateContentConfig(response_mime_type="application/json")
-                    )
-                    raw = resp.text or ""
-
-                if "```" in raw:
-                    raw = raw.split("```")[1]
-                    if raw.startswith("json"):
-                        raw = raw[4:]
-                raw = re.sub(r'[\x00-\x1f\x7f]', lambda m: ' ' if m.group() in ('\n', '\r', '\t') else '', raw)
-                return json.loads(raw.strip())
+                raw = call_openrouter(
+                    prompt=prompt,
+                    system_prompt="You are an expert tutor. Output valid JSON only.",
+                    temperature=0.3,
+                    max_tokens=600,
+                    api_key=self.provider.api_key,
+                    model=self.provider.model_name
+                )
+                parsed = parse_json_from_text(raw)
+                if isinstance(parsed, dict) and "summary" in parsed:
+                    return parsed
             except Exception as e:
-                logger.warning(f"Error in generate_atom_summary with {provider.provider_name}: {e}")
+                logger.error(f"Error in generate_atom_summary with OpenRouter: {e}")
 
         if mastery_score >= 0.75:
             boost = f"Excellent work on {atom_name}! You've built a strong foundation."
@@ -5071,6 +5077,7 @@ Return STRICT JSON only.
         else:
             boost = f"Don't worry â€” {atom_name} takes time. Every attempt makes you stronger."
             suggestions = ["Re-read the teaching material carefully.", "Focus on the basics before moving on."]
+
         return {
             "summary": f"{atom_name} is a key building block of {concept}.",
             "quick_notes": [f"Core idea: {atom_name} is fundamental to {concept}", "Review the analogy to reinforce understanding"],
@@ -5086,15 +5093,29 @@ FILE: backend/learning_engine/tests_question_generation.py
 ================================================
 # backend/learning_engine/tests_question_generation.py
 """
-Comprehensive test suite for the Multi-Provider Question Generation Pipeline.
-Tests Groq (Primary) + Google Gemini (Fallback) orchestration, error classification,
-smart immediate fallback on permanent errors, bounded retries on transient errors,
-intra-batch/history novelty gating, option shuffling and position balancing,
-strict correct_index validation, HTTP 503 error handling, and adaptive learning preservation.
+Comprehensive test suite for OpenRouter Question Generation Architecture.
+Covers:
+- TEST 1: Question generation via OpenRouter returns structured questions.
+- TEST 2 & 3: Novelty filtering against past session history rejects duplicates and paraphrases.
+- TEST 4 & 5: Backend option shuffling distributes correct answers across A/B/C/D and eliminates Option A bias.
+- TEST 6: Robust JSON parsing of LLM responses.
+- TEST 7: Malformed JSON handling does not crash.
+- TEST 8: Simulated duplicate candidate is rejected by NOVELTY_GATE.
+- TEST 9: Invalid/missing correct answer is rejected and never converted to 0.
+- TEST 10: Centralized question generation service is used.
+- TEST 11: Groq is no longer used in question generation.
+- TEST 12: Gemini is no longer used in question generation.
+- TEST 13: Missing API_KEY raises clear configuration error.
+- TEST 14: Missing MODEL raises clear configuration error.
+- TEST 15: Model name is read dynamically from environment variable MODEL.
+- TEST 16: No sentence-transformers or local embedding models loaded.
+- Adaptive learning engine mastery/accuracy calculation remains functional.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 from django.test import TestCase
+from django.conf import settings
 from django.contrib.auth.models import User
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -5102,26 +5123,60 @@ from rest_framework import status
 from accounts.models import Concept, TeachingAtom, LearningSession, StudentProgress, LearningProfile
 from learning_engine.question_generator import (
     QuestionGenerator,
-    GroqQuestionProvider,
-    GeminiQuestionProvider,
+    OpenRouterQuestionProvider,
     QuestionGenerationError,
     normalize_question_text,
     calculate_question_similarity,
     is_novel_question,
     shuffle_and_balance_options,
     _validate_single_question,
+    safe_parse_json_questions,
     QUESTION_SIMILARITY_THRESHOLD
 )
 from learning_engine.knowledge_tracing import calculate_updated_mastery
 
 
-class LightweightSimilarityAndSchemaTests(TestCase):
-    """Unit tests for novelty detection, schema validation, and option shuffling."""
+class ArchitectureAndConfigurationTests(TestCase):
+    """Tests for environment configuration, model dynamics, and provider retirement."""
 
     def test_no_sentence_transformers_or_local_embeddings(self):
-        """TEST 14: Ensure no sentence-transformers or local embedding models are imported."""
+        """TEST 16: Ensure no sentence-transformers or local embedding models are imported."""
         import sys
         self.assertNotIn('sentence_transformers', sys.modules)
+
+    def test_missing_api_key_raises_configuration_error(self):
+        """TEST 13: Temporarily missing API_KEY raises clear configuration error."""
+        provider = OpenRouterQuestionProvider(api_key="", model_name="test-model")
+        with self.assertRaises(QuestionGenerationError) as ctx:
+            provider.generate_candidate_questions("Generate 1 question", 1)
+        self.assertIn("API_KEY", str(ctx.exception))
+
+    def test_missing_model_raises_configuration_error(self):
+        """TEST 14: Temporarily missing MODEL raises clear configuration error."""
+        provider = OpenRouterQuestionProvider(api_key="valid-key", model_name="")
+        with self.assertRaises(QuestionGenerationError) as ctx:
+            provider.generate_candidate_questions("Generate 1 question", 1)
+        self.assertIn("MODEL", str(ctx.exception))
+
+    def test_model_name_is_dynamic_and_not_hardcoded(self):
+        """TEST 15: Verify model name is read dynamically from MODEL environment variable."""
+        custom_model = "test-custom-provider/model-v1:free"
+        provider = OpenRouterQuestionProvider(api_key="test-key", model_name=custom_model)
+        self.assertEqual(provider.model_name, custom_model)
+
+    def test_groq_and_gemini_removed_from_question_generator(self):
+        """TEST 11 & 12: Verify Groq and Gemini are no longer used in question_generator.py."""
+        import inspect
+        import learning_engine.question_generator as qg_mod
+        src = inspect.getsource(qg_mod)
+        self.assertNotIn("GroqQuestionProvider", src)
+        self.assertNotIn("GeminiQuestionProvider", src)
+        self.assertNotIn("llama-3.1-8b-instant", src)
+        self.assertNotIn("gemini-2.5-flash", src)
+
+
+class LightweightSimilarityAndSchemaTests(TestCase):
+    """Unit tests for novelty detection, schema validation, and option shuffling."""
 
     def test_normalize_question_text(self):
         """Test normalization: casing, punctuation, whitespace."""
@@ -5130,7 +5185,7 @@ class LightweightSimilarityAndSchemaTests(TestCase):
         self.assertEqual(normalized, "what is cache mapping and how does it work")
 
     def test_exact_and_near_duplicate_similarity(self):
-        """Test exact and semantically similar questions are flagged with high similarity."""
+        """TEST 8: Test exact and semantically similar questions are flagged by NOVELTY_GATE."""
         q1 = "What is the primary purpose of cache mapping?"
         q2 = "What does cache mapping mean?"
         q3 = "Which statement best describes the primary purpose of cache mapping?"
@@ -5145,10 +5200,15 @@ class LightweightSimilarityAndSchemaTests(TestCase):
         sim_diff = calculate_question_similarity(q1, q4)
         self.assertLess(sim_diff, QUESTION_SIMILARITY_THRESHOLD)
 
-    def test_validate_single_question_strict_correct_index(self):
-        """TEST 8: Missing or invalid correct_index is rejected and NEVER defaulted to 0."""
-        # Valid question
-        valid_q = {
+        # Novelty gate rejection check
+        is_novel, sim, matched = is_novel_question(q3, [q1])
+        self.assertFalse(is_novel)
+        self.assertEqual(matched, q1)
+
+    def test_validate_single_question_strict_correct_index_and_answer(self):
+        """TEST 9: Missing or invalid correct answer is rejected and NEVER defaulted to 0."""
+        # Valid with correct_index
+        valid_q1 = {
             "difficulty": "easy",
             "cognitive_operation": "apply",
             "estimated_time": 40,
@@ -5156,19 +5216,32 @@ class LightweightSimilarityAndSchemaTests(TestCase):
             "options": ["Slot 0", "Slot 1", "Slot 2", "Slot 3"],
             "correct_index": 2
         }
-        res = _validate_single_question(valid_q)
-        self.assertIsNotNone(res)
-        self.assertEqual(res["correct_index"], 2)
+        res1 = _validate_single_question(valid_q1)
+        self.assertIsNotNone(res1)
+        self.assertEqual(res1["correct_index"], 2)
 
-        # Missing correct_index -> MUST BE REJECTED (None)
-        missing_ci = {
+        # Valid with correct_answer string
+        valid_q2 = {
+            "difficulty": "easy",
+            "cognitive_operation": "apply",
+            "estimated_time": 40,
+            "question": "Where does block 0x10 map in a direct-mapped cache?",
+            "options": ["Slot 0", "Slot 1", "Slot 2", "Slot 3"],
+            "correct_answer": "Slot 2"
+        }
+        res2 = _validate_single_question(valid_q2)
+        self.assertIsNotNone(res2)
+        self.assertEqual(res2["correct_index"], 2)
+
+        # Missing correct_answer / correct_index -> MUST BE REJECTED (None)
+        missing_ca = {
             "difficulty": "easy",
             "cognitive_operation": "apply",
             "estimated_time": 40,
             "question": "Where does block 0x10 map in a direct-mapped cache?",
             "options": ["Slot 0", "Slot 1", "Slot 2", "Slot 3"]
         }
-        self.assertIsNone(_validate_single_question(missing_ci))
+        self.assertIsNone(_validate_single_question(missing_ca))
 
         # Invalid out-of-range correct_index -> MUST BE REJECTED (None)
         out_of_range_ci = {
@@ -5181,19 +5254,19 @@ class LightweightSimilarityAndSchemaTests(TestCase):
         }
         self.assertIsNone(_validate_single_question(out_of_range_ci))
 
-        # Non-numeric correct_index -> MUST BE REJECTED (None)
-        non_numeric_ci = {
+        # Non-matching correct_answer string -> MUST BE REJECTED (None)
+        non_matching_ca = {
             "difficulty": "easy",
             "cognitive_operation": "apply",
             "estimated_time": 40,
             "question": "Where does block 0x10 map in a direct-mapped cache?",
             "options": ["Slot 0", "Slot 1", "Slot 2", "Slot 3"],
-            "correct_index": "invalid"
+            "correct_answer": "Non-existent option"
         }
-        self.assertIsNone(_validate_single_question(non_numeric_ci))
+        self.assertIsNone(_validate_single_question(non_matching_ca))
 
     def test_shuffle_and_balance_options(self):
-        """TEST 9 & 10: Options are shuffled, correct_index accurately maps, positions vary across A/B/C/D."""
+        """TEST 4 & 5: Options are shuffled, correct_index accurately maps, positions vary across A/B/C/D."""
         batch = [
             {"question": "Q1", "options": ["Correct_A", "W1", "W2", "W3"], "correct_index": 0},
             {"question": "Q2", "options": ["Correct_B", "W1", "W2", "W3"], "correct_index": 0},
@@ -5214,58 +5287,69 @@ class LightweightSimilarityAndSchemaTests(TestCase):
         assigned_indices = {q['correct_index'] for q in shuffled_batch}
         self.assertEqual(assigned_indices, {0, 1, 2, 3})
 
+    def test_json_parsing_valid_and_malformed(self):
+        """TEST 6 & 7: Test safe_parse_json_questions on valid, markdown-fenced, and malformed JSON."""
+        # Valid JSON with questions list
+        raw_valid = '{"questions": [{"question": "Q1 text?", "options": ["A", "B", "C", "D"], "correct_index": 0}]}'
+        parsed1 = safe_parse_json_questions(raw_valid)
+        self.assertEqual(len(parsed1), 1)
+        self.assertEqual(parsed1[0]['question'], "Q1 text?")
 
-class MultiProviderOrchestrationTests(TestCase):
-    """Unit tests for Groq (Primary) + Gemini (Fallback) orchestration logic."""
+        # Markdown-wrapped JSON
+        raw_md = '```json\n{"questions": [{"question": "Q2 text?", "options": ["A", "B", "C", "D"], "correct_index": 1}]}\n```'
+        parsed2 = safe_parse_json_questions(raw_md)
+        self.assertEqual(len(parsed2), 1)
+        self.assertEqual(parsed2[0]['question'], "Q2 text?")
+
+        # Malformed / broken JSON does not crash and returns empty list
+        raw_malformed = 'This is random text without JSON.'
+        parsed3 = safe_parse_json_questions(raw_malformed)
+        self.assertEqual(parsed3, [])
+
+
+class OpenRouterQuestionGeneratorTests(TestCase):
+    """Unit and integration tests for OpenRouter question generation orchestrator."""
 
     def setUp(self):
-        self.mock_groq_prov = MagicMock(spec=GroqQuestionProvider)
-        self.mock_groq_prov.provider_name = "Groq"
-        self.mock_groq_prov.model_name = "llama-3.1-8b-instant"
-        self.mock_groq_prov.is_permanent_error = GroqQuestionProvider.is_permanent_error.__get__(self.mock_groq_prov)
+        self.mock_provider = MagicMock(spec=OpenRouterQuestionProvider)
+        self.mock_provider.api_key = "test-openrouter-key"
+        self.mock_provider.model_name = "test-model:free"
+        self.mock_provider.is_permanent_error.return_value = False
 
-        self.mock_gemini_prov = MagicMock(spec=GeminiQuestionProvider)
-        self.mock_gemini_prov.provider_name = "Gemini"
-        self.mock_gemini_prov.model_name = "gemini-2.5-flash"
-        self.mock_gemini_prov.is_permanent_error = GeminiQuestionProvider.is_permanent_error.__get__(self.mock_gemini_prov)
-
-        self.generator = QuestionGenerator(
-            groq_provider=self.mock_groq_prov,
-            gemini_provider=self.mock_gemini_prov
-        )
+        self.generator = QuestionGenerator(provider=self.mock_provider)
 
         self.teaching_content = {
-            "explanation": "Cache mapping defines memory address to cache line correspondence.",
-            "analogy": "Assigned lockers.",
-            "examples": ["Direct", "Associative", "Set-associative"]
+            "explanation": "Arrays store elements in contiguous memory locations.",
+            "analogy": "Consecutive mailboxes.",
+            "examples": ["Direct indexing arr[i]"]
         }
 
-    def test_groq_succeeds_gemini_not_called(self):
-        """TEST 1: When Groq succeeds on attempt 1, Gemini is never called."""
-        groq_candidates = [
+    def test_openrouter_candidate_generation_success(self):
+        """TEST 1: Verify successful OpenRouter candidate batch generation and return."""
+        candidates = [
             {
                 "difficulty": "easy",
                 "cognitive_operation": "apply",
                 "estimated_time": 40,
-                "question": "In direct mapping, how is the line index determined?",
-                "options": ["Modulo calculation", "Random selection", "LRU hash", "Disk lookup"],
-                "correct_index": 0
+                "question": "What is the primary memory property of arrays?",
+                "options": ["Contiguous memory allocation", "Linked pointers", "Dynamic hashing", "Tree hierarchy"],
+                "correct_answer": "Contiguous memory allocation"
             },
             {
                 "difficulty": "medium",
                 "cognitive_operation": "analyze",
                 "estimated_time": 60,
-                "question": "What happens when multiple memory blocks map to the exact same cache line?",
-                "options": ["Conflict misses cause thrashing", "Capacity doubles", "CPU halts", "Addresses merge"],
-                "correct_index": 0
+                "question": "Why does array index lookup operate in O(1) time?",
+                "options": ["Offset formula base + i * size", "Binary search", "Hash table lookup", "Pointer traversal"],
+                "correct_answer": "Offset formula base + i * size"
             }
         ]
-        self.mock_groq_prov.generate_candidate_questions.return_value = groq_candidates
+        self.mock_provider.generate_candidate_questions.return_value = candidates
 
         questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
+            subject="Data Structures",
+            concept="Arrays",
+            atom="Contiguous Memory",
             teaching_content=self.teaching_content,
             need_easy=1,
             need_medium=1,
@@ -5274,174 +5358,76 @@ class MultiProviderOrchestrationTests(TestCase):
         )
 
         self.assertEqual(len(questions), 2)
-        self.assertEqual(self.mock_groq_prov.generate_candidate_questions.call_count, 1)
-        self.mock_gemini_prov.generate_candidate_questions.assert_not_called()
+        self.assertEqual(self.mock_provider.generate_candidate_questions.call_count, 1)
 
-    def test_groq_404_model_not_found_immediately_calls_gemini(self):
-        """TEST 2: When Groq returns 404 model_not_found, it switches to Gemini immediately without retrying Groq."""
-        self.mock_groq_prov.generate_candidate_questions.side_effect = Exception("404 - model_not_found: llama-3.3-70b-versatile does not exist")
+    def test_repeated_generation_applies_novelty_gate(self):
+        """TEST 2 & 3: Novelty gate rejects duplicates against history across generation attempts."""
+        prev_q = {"question": "What is the primary memory property of arrays?"}
 
-        gemini_candidates = [
+        # Attempt 1 returns 1 duplicate and 1 novel candidate
+        attempt1_candidates = [
             {
                 "difficulty": "easy",
                 "cognitive_operation": "apply",
                 "estimated_time": 40,
-                "question": "How does fully associative cache placement differ from direct mapping?",
-                "options": ["Block can occupy any line", "No tag bits required", "Only one line available", "DRAM is bypassed"],
-                "correct_index": 0
-            }
-        ]
-        self.mock_gemini_prov.generate_candidate_questions.return_value = gemini_candidates
-
-        questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
-            teaching_content=self.teaching_content,
-            need_easy=1,
-            need_medium=0,
-            need_hard=0,
-            previous_questions=[]
-        )
-
-        self.assertEqual(len(questions), 1)
-        # Groq called exactly once (because 404 is a permanent error and immediately switches to Gemini)
-        self.assertEqual(self.mock_groq_prov.generate_candidate_questions.call_count, 1)
-        # Gemini was called to generate the question
-        self.assertEqual(self.mock_gemini_prov.generate_candidate_questions.call_count, 1)
-
-    def test_groq_timeout_retries_then_gemini_fallback(self):
-        """TEST 3: When Groq encounters a transient timeout, it retries once, then falls back to Gemini."""
-        self.mock_groq_prov.generate_candidate_questions.side_effect = Exception("ReadTimeout connection timed out")
-
-        gemini_candidates = [
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "Why does a 2-way set-associative cache reduce conflict misses?",
-                "options": ["Provides two placement options per set", "Doubles clock frequency", "Eliminates cache tags", "Replaces RAM"],
-                "correct_index": 0
-            }
-        ]
-        self.mock_gemini_prov.generate_candidate_questions.return_value = gemini_candidates
-
-        questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
-            teaching_content=self.teaching_content,
-            need_easy=1,
-            need_medium=0,
-            need_hard=0,
-            previous_questions=[]
-        )
-
-        self.assertEqual(len(questions), 1)
-        # Groq retried up to GROQ_MAX_ATTEMPTS (2)
-        self.assertEqual(self.mock_groq_prov.generate_candidate_questions.call_count, 2)
-        # Gemini was invoked and succeeded
-        self.assertEqual(self.mock_gemini_prov.generate_candidate_questions.call_count, 1)
-
-    def test_groq_invalid_json_retries_then_gemini_fallback(self):
-        """TEST 4: When Groq returns invalid JSON, it retries and falls back to Gemini if unrecovered."""
-        self.mock_groq_prov.generate_candidate_questions.side_effect = Exception("JSONDecodeError: Expecting value: line 1 column 1")
-
-        gemini_candidates = [
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "What is the function of the cache line offset field?",
-                "options": ["Selects specific byte or word within line", "Identifies cache set", "Compares tag directory", "Controls write buffer"],
-                "correct_index": 0
-            }
-        ]
-        self.mock_gemini_prov.generate_candidate_questions.return_value = gemini_candidates
-
-        questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
-            teaching_content=self.teaching_content,
-            need_easy=1,
-            need_medium=0,
-            need_hard=0,
-            previous_questions=[]
-        )
-
-        self.assertEqual(len(questions), 1)
-        self.assertEqual(self.mock_groq_prov.generate_candidate_questions.call_count, 2)
-        self.assertEqual(self.mock_gemini_prov.generate_candidate_questions.call_count, 1)
-
-    def test_groq_partial_duplicate_gemini_fills_missing(self):
-        """TEST 5 & 6: Groq produces 1 valid + 1 duplicate question; Gemini generates the missing 1 question."""
-        # Groq returns 1 novel question and 1 duplicate
-        groq_resp = [
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "How does direct mapping determine line index?",
-                "options": ["Modulo address", "Random", "LRU", "Disk"],
-                "correct_index": 0
+                "question": "What is the primary memory property of arrays?",  # Duplicate!
+                "options": ["Contiguous memory", "Linked nodes", "Hash table", "Trees"],
+                "correct_answer": "Contiguous memory"
             },
             {
                 "difficulty": "medium",
                 "cognitive_operation": "analyze",
                 "estimated_time": 60,
-                "question": "What is cache mapping in computer systems?",  # Duplicate of history
-                "options": ["A mechanism for placing memory blocks in cache", "A disk format", "A CPU routine", "A protocol"],
-                "correct_index": 0
+                "question": "Why does array index lookup operate in O(1) time?",  # Novel
+                "options": ["Base plus offset computation", "Binary search", "Hashing", "Linear scan"],
+                "correct_answer": "Base plus offset computation"
             }
         ]
-        # On attempt 2, Groq fails
-        self.mock_groq_prov.generate_candidate_questions.side_effect = [
-            groq_resp,
-            Exception("Groq rate limit 429")
-        ]
 
-        # Gemini produces the missing 1 medium question
-        gemini_resp = [
+        # Attempt 2 produces the missing 1 easy question
+        attempt2_candidates = [
             {
-                "difficulty": "medium",
-                "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "Under what access pattern will direct-mapped cache suffer severe thrashing?",
-                "options": ["Alternating access to blocks mapping to same slot", "Purely sequential access", "Single block loops", "Zero-stride array access"],
-                "correct_index": 0
+                "difficulty": "easy",
+                "cognitive_operation": "apply",
+                "estimated_time": 40,
+                "question": "How are elements arranged physically in array storage?",  # Novel replacement
+                "options": ["In consecutive memory addresses", "Scattered randomly", "In linked blocks", "On secondary disk only"],
+                "correct_answer": "In consecutive memory addresses"
             }
         ]
-        self.mock_gemini_prov.generate_candidate_questions.return_value = gemini_resp
 
-        history = [{"question": "What is cache mapping in computer systems?"}]
+        self.mock_provider.generate_candidate_questions.side_effect = [
+            attempt1_candidates,
+            attempt2_candidates
+        ]
+
         questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
+            subject="Data Structures",
+            concept="Arrays",
+            atom="Contiguous Memory",
             teaching_content=self.teaching_content,
             need_easy=1,
             need_medium=1,
             need_hard=0,
-            previous_questions=history
+            previous_questions=[prev_q]
         )
 
         self.assertEqual(len(questions), 2)
-        # Verify 1 came from Groq and 1 from Gemini
+        self.assertEqual(self.mock_provider.generate_candidate_questions.call_count, 2)
         q_texts = [q['question'] for q in questions]
-        self.assertIn("How does direct mapping determine line index?", q_texts)
-        self.assertIn("Under what access pattern will direct-mapped cache suffer severe thrashing?", q_texts)
+        self.assertNotIn("What is the primary memory property of arrays?", q_texts)
+        self.assertIn("Why does array index lookup operate in O(1) time?", q_texts)
+        self.assertIn("How are elements arranged physically in array storage?", q_texts)
 
-    def test_both_providers_fail_raises_question_generation_error(self):
-        """TEST 7: When both Groq and Gemini fail, raise QuestionGenerationError without static fallback."""
-        self.mock_groq_prov.generate_candidate_questions.side_effect = Exception("Groq down")
-        self.mock_gemini_prov.generate_candidate_questions.side_effect = Exception("Gemini down")
+    def test_provider_exhaustion_raises_question_generation_error(self):
+        """Verify that provider failure across all attempts raises QuestionGenerationError without static fallback."""
+        self.mock_provider.generate_candidate_questions.side_effect = Exception("OpenRouter 500 error")
 
         with self.assertRaises(QuestionGenerationError):
             self.generator.generate_questions_from_teaching(
-                subject="Computer Architecture",
-                concept="Memory Organization",
-                atom="Cache Mapping",
+                subject="Data Structures",
+                concept="Arrays",
+                atom="Contiguous Memory",
                 teaching_content=self.teaching_content,
                 need_easy=1,
                 need_medium=1,
@@ -5463,7 +5449,8 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
         self.concept = Concept.objects.create(
             name="Arrays",
             subject="Data Structures",
-            difficulty="easy"
+            difficulty="easy",
+            created_by=self.user
         )
         self.atom = TeachingAtom.objects.create(
             name="Contiguous Memory",
@@ -5485,123 +5472,73 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
             session_data={}
         )
 
-    @patch.object(GroqQuestionProvider, 'generate_candidate_questions')
-    def test_force_new_behavior_and_novelty(self, mock_groq_gen):
-        """TEST 11: force_new=False reuses uncompleted batch; force_new=True generates fresh novel questions."""
-        batch1 = [
+    @patch.object(OpenRouterQuestionProvider, 'generate_candidate_questions')
+    def test_initial_quiz_endpoint_generates_questions(self, mock_gen):
+        """TEST 10: Verify /auth/api/initial-quiz/ uses centralized QuestionGenerator."""
+        candidates = [
             {
                 "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "How is the physical memory address of array element arr[i] computed?",
-                "options": ["base_address + i * element_size", "base_address * i", "base_address + i", "pointer_hash(i)"],
-                "correct_index": 0
+                "cognitive_operation": "recall",
+                "estimated_time": 30,
+                "question": "What is the primary memory property of arrays?",
+                "options": ["Contiguous memory", "Linked nodes", "Dynamic hashing", "Tree hierarchy"],
+                "correct_answer": "Contiguous memory"
             },
             {
                 "difficulty": "easy",
                 "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "What primary hardware advantage results from storing elements in contiguous memory?",
-                "options": ["Spatial locality and cache line prefetching", "Automatic dynamic resizing", "Garbage collection exemption", "Zero memory overhead"],
-                "correct_index": 0
+                "estimated_time": 30,
+                "question": "How is the physical memory address of element arr[i] calculated?",
+                "options": ["base + i * size", "base * i", "base + i", "pointer_hash(i)"],
+                "correct_answer": "base + i * size"
             },
             {
                 "difficulty": "medium",
                 "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "Why does inserting an element at index 0 of an array take O(n) time?",
-                "options": ["All subsequent elements must be shifted right", "Memory must be re-initialized to zeros", "CPU cache is invalidated", "Operating system context switch occurs"],
-                "correct_index": 0
+                "estimated_time": 45,
+                "question": "Why does inserting an item at the beginning of an array take O(n) time?",
+                "options": ["All elements must be shifted", "Memory is reallocated", "CPU cache is cleared", "Page fault occurs"],
+                "correct_answer": "All elements must be shifted"
             },
             {
                 "difficulty": "medium",
                 "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "What occurs if an application writes past the allocated contiguous bounds of an array?",
-                "options": ["Buffer overflow corrupting adjacent memory", "Array automatically doubles capacity", "Compilation warning halts execution", "Index resets to zero"],
-                "correct_index": 0
+                "estimated_time": 45,
+                "question": "What hardware performance benefit arises from spatial locality in arrays?",
+                "options": ["CPU cache line prefetching", "Automatic garbage collection", "Zero fragmentation", "Thread safety"],
+                "correct_answer": "CPU cache line prefetching"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "apply",
+                "estimated_time": 45,
+                "question": "Which constant-time operation is directly enabled by contiguous allocation?",
+                "options": ["Random index access in O(1)", "Arbitrary deletion in O(1)", "Dynamic resizing", "Sorted binary search"],
+                "correct_answer": "Random index access in O(1)"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What occurs when an application writes past allocated array bounds?",
+                "options": ["Buffer overflow", "Automatic expansion", "Zeroing memory", "Compiler warning only"],
+                "correct_answer": "Buffer overflow"
             }
         ]
+        mock_gen.return_value = candidates
 
-        batch2 = [
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "In a 64-bit architecture, how many bytes separate adjacent integer elements in a contiguous array?",
-                "options": ["4 or 8 bytes depending on integer type size", "Always 1 byte", "16 bytes", "64 bytes"],
-                "correct_index": 0
-            },
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "Which constant-time operation is directly enabled by contiguous memory allocation?",
-                "options": ["Random index access in O(1)", "Arbitrary element deletion in O(1)", "Dynamic resizing in O(1)", "Sorted search in O(1)"],
-                "correct_index": 0
-            },
-            {
-                "difficulty": "medium",
-                "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "How does memory fragmentation prevent allocation of a large contiguous array even when total free RAM is sufficient?",
-                "options": ["No single uninterrupted memory block is large enough", "Virtual memory is disabled", "CPU registers are full", "RAM bandwidth is exceeded"],
-                "correct_index": 0
-            },
-            {
-                "difficulty": "medium",
-                "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "Why do 2D matrices stored in row-major order exhibit better cache performance when traversed row by row?",
-                "options": ["Consecutive memory addresses align with cache lines", "Columns have smaller data types", "Row headers are cached in CPU", "Pointers are not dereferenced"],
-                "correct_index": 0
-            }
-        ]
-
-        mock_groq_gen.side_effect = [batch1, batch2]
-
-        # 1. First call with force_new=False
-        resp1 = self.client.post('/auth/api/generate-questions-from-teaching/', {
-            'session_id': self.session.id,
-            'atom_id': self.atom.id,
-            'force_new': False
+        resp = self.client.post('/auth/api/initial-quiz/', {
+            'session_id': self.session.id
         }, format='json')
-        self.assertEqual(resp1.status_code, 200)
-        q_set_1 = resp1.data['questions']
-        self.assertEqual(len(q_set_1), 4)
 
-        # 2. Second call with force_new=False -> should reuse existing questions
-        resp2 = self.client.post('/auth/api/generate-questions-from-teaching/', {
-            'session_id': self.session.id,
-            'atom_id': self.atom.id,
-            'force_new': False
-        }, format='json')
-        self.assertEqual(resp2.status_code, 200)
-        self.assertTrue(resp2.data.get('reused', False))
-        self.assertEqual(resp1.data['questions'][0]['question'], resp2.data['questions'][0]['question'])
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('questions', resp.data)
+        self.assertEqual(len(resp.data['questions']), 5)
 
-        # 3. Third call with force_new=True -> should generate a fresh novel set
-        resp3 = self.client.post('/auth/api/generate-questions-from-teaching/', {
-            'session_id': self.session.id,
-            'atom_id': self.atom.id,
-            'force_new': True
-        }, format='json')
-        self.assertEqual(resp3.status_code, 200)
-        self.assertFalse(resp3.data.get('reused', False))
-        q_set_3 = resp3.data['questions']
-        self.assertEqual(len(q_set_3), 4)
-
-        # Verify questions in set 3 are novel compared to set 1
-        for q3 in q_set_3:
-            is_novel, sim, _ = is_novel_question(q3, q_set_1)
-            self.assertTrue(is_novel, f"force_new=True returned duplicate: {q3['question']}")
-
-    @patch.object(GroqQuestionProvider, 'generate_candidate_questions')
-    @patch.object(GeminiQuestionProvider, 'generate_candidate_questions')
-    def test_both_providers_failing_returns_http_503(self, mock_gemini_gen, mock_groq_gen):
-        """TEST 7: When both providers fail, API returns HTTP 503 Service Unavailable."""
-        mock_groq_gen.side_effect = Exception("Groq 500 error")
-        mock_gemini_gen.side_effect = Exception("Gemini 500 error")
+    @patch.object(OpenRouterQuestionProvider, 'generate_candidate_questions')
+    def test_provider_failure_returns_http_503(self, mock_gen):
+        """Verify API returns HTTP 503 when OpenRouter fails."""
+        mock_gen.side_effect = Exception("OpenRouter down")
 
         resp = self.client.post('/auth/api/generate-questions-from-teaching/', {
             'session_id': self.session.id,
@@ -5611,10 +5548,75 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertIn("error", resp.data)
-        self.assertIn("temporarily unavailable", resp.data["error"])
+
+    @patch('learning_engine.question_generator.call_openrouter')
+    def test_generate_concept_view_creates_atoms_via_openrouter(self, mock_call):
+        """Verify GenerateConceptView generates atoms for new concepts using OpenRouter."""
+        mock_call.return_value = '{"atoms": ["Declaration", "Index Access", "Memory Layout", "Bounds Checking"]}'
+
+        resp = self.client.post('/auth/api/generate-concept/', {
+            'subject': 'Computer Science',
+            'concept': 'Dynamic Arrays',
+            'knowledge_level': 'intermediate'
+        }, format='json')
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('atoms', resp.data)
+        self.assertEqual(len(resp.data['atoms']), 4)
+        self.assertIn('Generated 4 atoms for Dynamic Arrays', resp.data['message'])
+
+    def test_generate_concept_view_returns_existing_atoms_without_unbound_error(self):
+        """Verify GenerateConceptView does not raise UnboundLocalError when concept already has atoms."""
+        resp = self.client.post('/auth/api/generate-concept/', {
+            'subject': 'Data Structures',
+            'concept': 'Arrays',
+            'knowledge_level': 'intermediate'
+        }, format='json')
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('atoms', resp.data)
+        self.assertEqual(len(resp.data['atoms']), 1)
+        self.assertIn('Generated 1 atoms for Arrays', resp.data['message'])
+
+    @patch('learning_engine.question_generator.call_openrouter')
+    def test_generate_concept_view_returns_503_on_atom_generation_failure(self, mock_call):
+        """Verify GenerateConceptView returns controlled HTTP 503 when OpenRouter fails."""
+        mock_call.side_effect = Exception("OpenRouter 503 error")
+
+        resp = self.client.post('/auth/api/generate-concept/', {
+            'subject': 'Computer Science',
+            'concept': 'Failing Concept',
+            'knowledge_level': 'intermediate'
+        }, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn('error', resp.data)
+
+    @patch('learning_engine.adaptive_flow.call_openrouter')
+    def test_adaptive_flow_generate_teaching_content_uses_openrouter(self, mock_call):
+        """Verify AdaptiveLearningEngine.generate_teaching_content uses OpenRouter."""
+        mock_call.return_value = json.dumps({
+            "explanation": "Arrays store items in contiguous memory.",
+            "example": "Shopping list in numbered rows.",
+            "analogy": "Consecutive lockers in a gym.",
+            "misconception": "Arrays resize dynamically in all languages.",
+            "practical_application": "Fast cache-friendly data processing."
+        })
+
+        from learning_engine.adaptive_flow import AdaptiveLearningEngine
+        engine = AdaptiveLearningEngine()
+        content = engine.generate_teaching_content(
+            atom_name="Contiguous Storage",
+            subject="Data Structures",
+            concept="Arrays",
+            knowledge_level="intermediate"
+        )
+
+        self.assertEqual(content["analogy"], "Consecutive lockers in a gym.")
+        self.assertTrue(mock_call.called)
 
     def test_existing_mastery_and_accuracy_pipeline_remains_functional(self):
-        """TEST 12 & 13: Ensure calculate_updated_mastery and adaptive engine updates work with shuffled questions."""
+        """Ensure calculate_updated_mastery and adaptive engine updates work with shuffled questions."""
         question = {
             "difficulty": "medium",
             "cognitive_operation": "apply",
@@ -5624,7 +5626,6 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
             "correct_index": 2  # Shuffled to Option C
         }
 
-        # Calculate mastery update on correct answer
         initial_mastery = 0.3
         initial_theta = 0.0
         new_mastery, new_theta, metrics = calculate_updated_mastery(
@@ -5636,12 +5637,12 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
             error_type=None
         )
 
-        # Verify mastery and theta increase on correct answer
         self.assertGreater(new_mastery, initial_mastery)
         self.assertGreater(new_theta, initial_theta)
         self.assertIn('mastery_change', metrics)
         self.assertIn('theta_change', metrics)
         self.assertIn('confidence', metrics)
+
 
 
 

@@ -306,7 +306,7 @@ AdaptiveLearning/
 | :--- | :--- | :--- |
 | **Backend Framework** | Python 3.11+, Django 6.0, Django REST Framework | REST APIs, business logic, ORM |
 | **Authentication** | `djangorestframework-simplejwt` | Token-based JWT auth for Student, Teacher, Parent |
-| **AI / LLM Providers** | **Groq** (`llama-3.3-70b-versatile`), **Google Gemini** (`gemini-2.5-flash`, `gemini-2.0-flash`) | Sub-concept generation, question authoring, analogies, AI doubt solver, study planner |
+| **AI / LLM Providers** | **Groq** (`llama-3.1-8b-instant`), **Google Gemini** (`gemini-2.5-flash`) | Multi-provider question generation, teaching content, sub-concept generation, analogies, AI doubt solver, study planner |
 | **External Search** | SerpAPI (`google_images`), `youtube-search` | Educational diagrams and video tutorials |
 | **Frontend Framework** | React 19.2, Vite 8.0, React Router v7 | Responsive SPA client |
 | **Styling & UI** | Tailwind CSS, Lucide React, Custom Glassmorphic Theme | Modern interface design system |

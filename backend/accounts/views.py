@@ -1,11 +1,12 @@
 import calendar as cal_module
 import json
+import logging
 import secrets
-from datetime import date, timedelta
+import threading
+from datetime import date, timedelta, datetime
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from learning_engine.ai_assistant import generate_ai_response
-import logging
 from django.db import models
 from django.db.models import Max
 from django.utils import timezone
@@ -158,7 +159,7 @@ class DashboardView(APIView):
 # ==================== SUGGESTION / AUTOCOMPLETE ====================
 
 import time as _time
-from google import genai as _genai
+from learning_engine.openrouter_client import call_openrouter, parse_json_from_text, OpenRouterError
 
 # --- Caches ---
 # subject_key → { "concepts": [...], "ts": timestamp }
@@ -170,39 +171,16 @@ _CACHE_TTL = 600          # 10 minutes
 _CONCEPT_CACHE_TTL = 900  # 15 minutes for full subject concepts
 
 
-def _get_gemini_client():
-    """Lazy singleton for Gemini client. Uses GEMINI_API_KEY only to avoid conflict warnings."""
-    gemini_key = getattr(settings, 'GEMINI_API_KEY', '') or getattr(settings, 'GOOGLE_API_KEY', '')
-    if not gemini_key:
-        return None
-    # Temporarily unset GOOGLE_API_KEY env var to avoid the SDK warning
-    # "Both GOOGLE_API_KEY and GEMINI_API_KEY are set. Using GOOGLE_API_KEY."
-    import os as _os
-    saved = _os.environ.pop('GOOGLE_API_KEY', None)
+def _openrouter_generate(prompt, max_tokens=400, temperature=0.4):
+    """Call OpenRouter and return raw text, or '' on failure."""
     try:
-        return _genai.Client(api_key=gemini_key)
-    finally:
-        if saved is not None:
-            _os.environ['GOOGLE_API_KEY'] = saved
-
-
-def _gemini_generate(prompt, max_tokens=400, temperature=0.4):
-    """Call Gemini and return raw text, or '' on failure."""
-    client = _get_gemini_client()
-    if not client:
-        return ''
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt,
-            config=_genai.types.GenerateContentConfig(
-                max_output_tokens=max_tokens,
-                temperature=temperature,
-            ),
+        return call_openrouter(
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens
         )
-        return (response.text or '').strip()
     except Exception as e:
-        logger.warning(f"Gemini suggestion call failed: {e}")
+        logger.warning(f"OpenRouter concept suggestion failed: {e}")
         return ''
 
 
@@ -210,18 +188,13 @@ def _parse_json_array(raw):
     """Extract a JSON array of strings from raw LLM output."""
     if not raw:
         return []
-    try:
-        if '```' in raw:
-            raw = raw.split('```')[1]
-            if raw.startswith('json'):
-                raw = raw[4:]
-        import re as _re
-        raw = _re.sub(r'[\x00-\x1f\x7f]', '', raw)
-        data = json.loads(raw.strip())
-        if isinstance(data, list):
-            return [str(c).strip() for c in data if c]
-    except Exception:
-        pass
+    parsed = parse_json_from_text(raw)
+    if isinstance(parsed, list):
+        return [str(c).strip() for c in parsed if c]
+    elif isinstance(parsed, dict):
+        for val in parsed.values():
+            if isinstance(val, list):
+                return [str(c).strip() for c in val if c]
     return []
 
 
@@ -655,16 +628,16 @@ class SuggestConceptsView(APIView):
 
     @staticmethod
     def _generate_base_concepts(subject):
-        """Generate the core concept list for a subject via Gemini (one-time per subject, with fallback)."""
+        """Generate the core concept list for a subject via OpenRouter (one-time per subject, with fallback)."""
         prompt = (
             f'List 20 important concepts/topics a student should learn in "{subject}". '
             f'Cover fundamentals to advanced. '
             f'Return ONLY a JSON array of strings — no explanation.\n'
             f'Example: ["Concept A", "Concept B"]'
         )
-        result = _parse_json_array(_gemini_generate(prompt, max_tokens=500, temperature=0.4))
+        result = _parse_json_array(_openrouter_generate(prompt, max_tokens=500, temperature=0.4))
 
-        # Fallback: check FALLBACK_CONCEPTS if Gemini returned nothing
+        # Fallback: check FALLBACK_CONCEPTS if OpenRouter returned nothing
         if not result:
             key = subject.strip().lower()
             result = FALLBACK_CONCEPTS.get(key, [])
@@ -679,7 +652,7 @@ class SuggestConceptsView(APIView):
 
     @staticmethod
     def _query_specific_concepts(subject, query):
-        """Ask Gemini for concepts that match a partial query within a subject (cached, with fallback)."""
+        """Ask OpenRouter for concepts that match a partial query within a subject (cached, with fallback)."""
         cache_key = (subject.lower(), query.lower().strip())
         entry = _query_cache.get(cache_key)
         if not _is_stale(entry, _CACHE_TTL):
@@ -691,9 +664,9 @@ class SuggestConceptsView(APIView):
             f'Return ONLY a JSON array of strings.\n'
             f'Example: ["Topic A", "Topic B"]'
         )
-        concepts = _parse_json_array(_gemini_generate(prompt, max_tokens=250, temperature=0.3))
+        concepts = _parse_json_array(_openrouter_generate(prompt, max_tokens=250, temperature=0.3))
 
-        # Fallback: filter from FALLBACK_CONCEPTS if Gemini returned nothing
+        # Fallback: filter from FALLBACK_CONCEPTS if OpenRouter returned nothing
         if not concepts:
             fb_key = subject.strip().lower()
             fallback_list = FALLBACK_CONCEPTS.get(fb_key, [])
@@ -743,17 +716,25 @@ class GenerateConceptView(APIView):
         # If concept already has atoms, return them directly (skip AI call)
         existing_atoms = TeachingAtom.objects.filter(concept=concept).order_by('order')
         if existing_atoms.exists():
+            atoms = [atom.name for atom in existing_atoms]
             atom_objects = [
                 {'id': atom.id, 'name': atom.name, 'order': atom.order}
                 for atom in existing_atoms
             ]
         else:
-            # Generate atoms using AI only for new concepts
+            # Generate atoms using OpenRouter only for new concepts
             generator = QuestionGenerator()
-            atoms = generator.generate_atoms(subject, concept_name)
+            try:
+                atoms = generator.generate_atoms(subject, concept_name)
+            except Exception as e:
+                logger.error(f"Atom generation error for {concept_name} via OpenRouter: {e}")
+                atoms = []
             
             if not atoms:
-                return Response({'error': 'Failed to generate atoms'}, status=500)
+                return Response(
+                    {'error': 'Failed to generate curriculum atoms. Please try again.'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
             
             # Create atom records (without questions)
             atom_objects = []
@@ -781,6 +762,18 @@ class GenerateConceptView(APIView):
 
 # ==================== TEACHING-FIRST FLOW WITH PACING ====================
 
+_generation_locks = {}
+_generation_locks_guard = threading.Lock()
+
+
+def get_generation_lock(key: str) -> threading.Lock:
+    """Thread-safe lock provider per session/atom to prevent duplicate concurrent LLM generations."""
+    with _generation_locks_guard:
+        if key not in _generation_locks:
+            _generation_locks[key] = threading.Lock()
+        return _generation_locks[key]
+
+
 class StartTeachingSessionView(APIView):
     """Step 2: Start a learning session for a concept"""
     permission_classes = [IsAuthenticated]
@@ -798,32 +791,34 @@ class StartTeachingSessionView(APIView):
         except Concept.DoesNotExist:
             return Response({'error': 'Concept not found'}, status=404)
 
-        # Check if there's an existing incomplete session
-        existing_session = LearningSession.objects.filter(
-            user=user, 
-            concept=concept, 
-            end_time__isnull=True
-        ).first()
+        session_lock = get_generation_lock(f"start_session_{user.id}_{concept.id}")
+        with session_lock:
+            # Check if there's an existing incomplete session
+            existing_session = LearningSession.objects.filter(
+                user=user, 
+                concept=concept, 
+                end_time__isnull=True
+            ).first()
 
-        if existing_session:
-            # Resume existing session
-            session = existing_session
-        else:
-            # Create new session
-            session = LearningSession.objects.create(
-                user=user,
-                concept=concept,
-                knowledge_level=knowledge_level,
-                session_data={
-                    'pacing_history': [],
-                    'performance_history': [],
-                    'answers': [],
-                    'initial_quiz_questions': [],
-                    'initial_quiz_answers': [],
-                    'final_questions': [],
-                    'final_answers': []
-                }
-            )
+            if existing_session:
+                # Resume existing session
+                session = existing_session
+            else:
+                # Create new session
+                session = LearningSession.objects.create(
+                    user=user,
+                    concept=concept,
+                    knowledge_level=knowledge_level,
+                    session_data={
+                        'pacing_history': [],
+                        'performance_history': [],
+                        'answers': [],
+                        'initial_quiz_questions': [],
+                        'initial_quiz_answers': [],
+                        'final_questions': [],
+                        'final_answers': []
+                    }
+                )
 
         # Get or create progress records for this concept's atoms
         # Each atom starts at 0.0 mastery and 'not_started' phase
@@ -928,51 +923,81 @@ class GenerateInitialQuizView(APIView):
         except LearningSession.DoesNotExist:
             return Response({'error': 'Session not found'}, status=404)
 
-        concept = session.concept
-        generator = QuestionGenerator()
-        try:
-            questions = generator.generate_initial_quiz(
-                subject=concept.subject,
-                concept=concept.name,
-                knowledge_level=session.knowledge_level,
-                count=5
-            )
-        except Exception as q_err:
-            logger.error(f"Error generating initial quiz via Groq: {q_err}")
-            return Response(
-                {'error': 'Question generation temporarily unavailable. Please try again.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+        session_lock = get_generation_lock(f"initial_quiz_{session.id}")
+        with session_lock:
+            session.refresh_from_db()
+            session_data = session.session_data or {}
+            existing_questions = session_data.get('initial_quiz_questions', [])
 
-        if not questions:
-            return Response(
-                {'error': 'Question generation temporarily unavailable. Please try again.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            # Idempotency / Duplicate request guard: reuse existing questions if already generated
+            if existing_questions:
+                logger.info(f"[DUPLICATE_GENERATION] Ignoring duplicate request for session={session.id}")
+                questions_payload = []
+                for q in existing_questions:
+                    questions_payload.append({
+                        'difficulty': q.get('difficulty', 'medium'),
+                        'cognitive_operation': q.get('cognitive_operation', 'recall'),
+                        'estimated_time': q.get('estimated_time', 30),
+                        'question': q.get('question', ''),
+                        'options': q.get('options', [])
+                    })
+                return Response({
+                    'questions': questions_payload,
+                    'total_questions': len(questions_payload),
+                    'reused': True
+                })
+
+            concept = session.concept
+            question_history = _collect_user_question_history(
+                user=request.user,
+                session=session
             )
+            generator = QuestionGenerator()
+            try:
+                questions = generator.generate_initial_quiz(
+                    subject=concept.subject,
+                    concept=concept.name,
+                    knowledge_level=session.knowledge_level,
+                    count=5,
+                    previous_questions=question_history,
+                    session_id=str(session.id)
+                )
+            except Exception as q_err:
+                logger.error(f"Error generating initial quiz via OpenRouter: {q_err}")
+                return Response(
+                    {'error': 'Question generation temporarily unavailable. Please try again.'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
 
-        # Store full questions for grading
-        session_data = session.session_data or {}
-        session_data['initial_quiz_questions'] = questions
-        session_data['initial_quiz_answers'] = []
-        session_data['current_phase'] = 'initial_quiz'
-        session.session_data = session_data
-        session.save()
+            if not questions:
+                return Response(
+                    {'error': 'Question generation temporarily unavailable. Please try again.'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
 
-        # Return without correct_index
-        questions_payload = []
-        for q in questions:
-            questions_payload.append({
-                'difficulty': q['difficulty'],
-                'cognitive_operation': q['cognitive_operation'],
-                'estimated_time': q['estimated_time'],
-                'question': q['question'],
-                'options': q['options']
+            # Store full questions for grading
+            session_data = session.session_data or {}
+            session_data['initial_quiz_questions'] = questions
+            session_data['initial_quiz_answers'] = []
+            session_data['current_phase'] = 'initial_quiz'
+            session.session_data = session_data
+            session.save()
+
+            # Return without correct_index
+            questions_payload = []
+            for q in questions:
+                questions_payload.append({
+                    'difficulty': q['difficulty'],
+                    'cognitive_operation': q['cognitive_operation'],
+                    'estimated_time': q['estimated_time'],
+                    'question': q['question'],
+                    'options': q['options']
+                })
+
+            return Response({
+                'questions': questions_payload,
+                'total_questions': len(questions_payload)
             })
-
-        return Response({
-            'questions': questions_payload,
-            'total_questions': len(questions_payload)
-        })
 
 
 class SubmitInitialQuizAnswerView(APIView):
@@ -1354,7 +1379,7 @@ class GetTeachingContentView(APIView):
         return base_level
 
 
-def _collect_user_question_history(user, atom, session=None, limit=20):
+def _collect_user_question_history(user, atom=None, session=None, limit=20):
     """
     Collect questions previously presented to this user on this atom and concept.
     Gathers questions from:
@@ -1432,161 +1457,166 @@ class GenerateQuestionsFromTeachingView(APIView):
         progress.phase = 'diagnostic'
         progress.save()
         
-        # Get current pacing
-        session_data = session.session_data or {}
-        pacing_history = session_data.get('pacing_history', [])
-        current_pacing = _normalize_pacing_value(pacing_history[-1], 'stay') if pacing_history else 'stay'
-        
-        # Honor force_new:
-        # If force_new is False and session already has generated questions for this atom that haven't been completed, reuse them
-        existing_questions = session_data.get('questions', [])
-        existing_atom_id = session_data.get('current_atom_id')
-        answers_in_batch = len(session_data.get('answers', []))
+        session_lock = get_generation_lock(f"teaching_questions_{session.id}_{atom.id}")
+        with session_lock:
+            session.refresh_from_db()
+            session_data = session.session_data or {}
+            pacing_history = session_data.get('pacing_history', [])
+            current_pacing = _normalize_pacing_value(pacing_history[-1], 'stay') if pacing_history else 'stay'
+            
+            # Honor force_new & Duplicate Request Protection:
+            # If force_new is False and session already has generated questions for this atom that haven't been completed, reuse them
+            existing_questions = session_data.get('questions', [])
+            existing_atom_id = session_data.get('current_atom_id')
+            answers_in_batch = len(session_data.get('answers', []))
 
-        if not force_new and existing_questions and existing_atom_id == atom.id and answers_in_batch < len(existing_questions):
-            questions_data = []
-            for q_data in existing_questions:
-                questions_data.append({
-                    'difficulty': q_data.get('difficulty', 'medium'),
-                    'cognitive_operation': q_data.get('cognitive_operation', 'apply'),
-                    'estimated_time': q_data.get('estimated_time', 60),
-                    'question': q_data.get('question', ''),
-                    'options': q_data.get('options', [])
+            if not force_new and existing_questions and existing_atom_id == atom.id and answers_in_batch < len(existing_questions):
+                logger.info(f"[DUPLICATE_GENERATION] Ignoring duplicate request for session={session.id}")
+                questions_data = []
+                for q_data in existing_questions:
+                    questions_data.append({
+                        'difficulty': q_data.get('difficulty', 'medium'),
+                        'cognitive_operation': q_data.get('cognitive_operation', 'apply'),
+                        'estimated_time': q_data.get('estimated_time', 60),
+                        'question': q_data.get('question', ''),
+                        'options': q_data.get('options', [])
+                    })
+                return Response({
+                    'atom_id': atom.id,
+                    'atom_name': atom.name,
+                    'questions': questions_data,
+                    'total_questions': len(questions_data),
+                    'current_pacing': current_pacing,
+                    'reused': True
                 })
+
+            # Collect previous question history for this student on this atom/concept
+            question_history = _collect_user_question_history(
+                user=request.user,
+                atom=atom,
+                session=session
+            )
+
+            # Always generate questions FROM teaching content for this flow
+            generator = QuestionGenerator()
+
+            # Determine question distribution based on knowledge level and pacing
+            level_config = self._get_question_distribution(session.knowledge_level, current_pacing)
+
+            # Ensure we have teaching content to ground the questions
+            teaching_content = {
+                'explanation': atom.explanation or '',
+                'analogy': atom.analogy or '',
+                'examples': atom.examples or []
+            }
+
+            if not teaching_content['explanation']:
+                engine = AdaptiveLearningEngine()
+                # Get quiz mastery for depth adaptation
+                quiz_eval = session_data.get('initial_quiz_evaluation', {})
+                quiz_running = session_data.get('quiz_running_state', {})
+                quiz_mastery = float(quiz_eval.get('mastery', quiz_running.get('mastery', 0.0)))
+                generated_teaching = engine.generate_teaching_content(
+                    atom_name=atom.name,
+                    subject=atom.concept.subject,
+                    concept=atom.concept.name,
+                    knowledge_level=session.knowledge_level,
+                    mastery_score=quiz_mastery
+                )
+                teaching_content = {
+                    'explanation': generated_teaching.get('explanation', ''),
+                    'analogy': generated_teaching.get('analogy', ''),
+                    'examples': [
+                        generated_teaching.get('example', ''),
+                        generated_teaching.get('practical_application', ''),
+                        generated_teaching.get('misconception', '')
+                    ]
+                }
+
+            try:
+                generated = generator.generate_questions_from_teaching(
+                    subject=atom.concept.subject,
+                    concept=atom.concept.name,
+                    atom=atom.name,
+                    teaching_content=teaching_content,
+                    need_easy=int(level_config.get('easy', 0) or 0),
+                    need_medium=int(level_config.get('medium', 0) or 0),
+                    need_hard=int(level_config.get('hard', 0) or 0),
+                    knowledge_level=session.knowledge_level,
+                    previous_questions=question_history,
+                    session_id=str(session.id)
+                )
+            except Exception as q_err:
+                logger.error(f"Error generating questions from teaching via OpenRouter: {q_err}")
+                return Response(
+                    {'error': 'Question generation temporarily unavailable. Please try again.'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+
+            if not generated:
+                return Response(
+                    {'error': 'Question generation temporarily unavailable. Please try again.'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+
+            # Prepare response + session grading payload
+            questions_data = []
+            full_questions = []
+            for q_data in generated:
+                adj_time = self._adjust_time_for_pacing(
+                    q_data['estimated_time'],
+                    current_pacing
+                )
+                questions_data.append({
+                    'difficulty': q_data['difficulty'],
+                    'cognitive_operation': q_data['cognitive_operation'],
+                    'estimated_time': adj_time,
+                    'question': q_data['question'],
+                    'options': q_data['options']
+                })
+
+                full_questions.append({
+                    'difficulty': q_data['difficulty'],
+                    'cognitive_operation': q_data['cognitive_operation'],
+                    'estimated_time': adj_time,
+                    'question': q_data['question'],
+                    'options': q_data['options'],
+                    'correct_index': q_data['correct_index']
+                })
+
+                # Persist to Question model so teachers can review
+                try:
+                    Question.objects.create(
+                        atom=atom,
+                        difficulty=q_data['difficulty'],
+                        cognitive_operation=q_data.get('cognitive_operation', 'apply'),
+                        estimated_time=adj_time,
+                        question_text=q_data['question'],
+                        options=q_data['options'],
+                        correct_index=q_data['correct_index'],
+                    )
+                except Exception as save_err:
+                    logger.warning(f"Failed to persist question to DB: {save_err}")
+
+            # Save full questions in session for grading, but reset answers for the new batch
+            session_data['questions'] = full_questions
+            session_data['current_atom_id'] = atom.id
+            session_data['answers'] = []
+            session_data['current_phase'] = 'diagnostic'
+            # Append newly accepted questions to asked_questions_history
+            history_list = session_data.setdefault('asked_questions_history', [])
+            for fq in full_questions:
+                history_list.append(fq)
+            session.session_data = session_data
+            session.save()
+
             return Response({
                 'atom_id': atom.id,
                 'atom_name': atom.name,
                 'questions': questions_data,
                 'total_questions': len(questions_data),
-                'current_pacing': current_pacing,
-                'reused': True
+                'current_pacing': current_pacing
             })
-
-        # Collect previous question history for this student on this atom/concept
-        question_history = _collect_user_question_history(
-            user=request.user,
-            atom=atom,
-            session=session
-        )
-
-        # Always generate questions FROM teaching content for this flow
-        generator = QuestionGenerator()
-
-        # Determine question distribution based on knowledge level and pacing
-        level_config = self._get_question_distribution(session.knowledge_level, current_pacing)
-
-        # Ensure we have teaching content to ground the questions
-        teaching_content = {
-            'explanation': atom.explanation or '',
-            'analogy': atom.analogy or '',
-            'examples': atom.examples or []
-        }
-
-        if not teaching_content['explanation']:
-            engine = AdaptiveLearningEngine()
-            # Get quiz mastery for depth adaptation
-            quiz_eval = session_data.get('initial_quiz_evaluation', {})
-            quiz_running = session_data.get('quiz_running_state', {})
-            quiz_mastery = float(quiz_eval.get('mastery', quiz_running.get('mastery', 0.0)))
-            generated_teaching = engine.generate_teaching_content(
-                atom_name=atom.name,
-                subject=atom.concept.subject,
-                concept=atom.concept.name,
-                knowledge_level=session.knowledge_level,
-                mastery_score=quiz_mastery
-            )
-            teaching_content = {
-                'explanation': generated_teaching.get('explanation', ''),
-                'analogy': generated_teaching.get('analogy', ''),
-                'examples': [
-                    generated_teaching.get('example', ''),
-                    generated_teaching.get('practical_application', ''),
-                    generated_teaching.get('misconception', '')
-                ]
-            }
-
-        try:
-            generated = generator.generate_questions_from_teaching(
-                subject=atom.concept.subject,
-                concept=atom.concept.name,
-                atom=atom.name,
-                teaching_content=teaching_content,
-                need_easy=int(level_config.get('easy', 0) or 0),
-                need_medium=int(level_config.get('medium', 0) or 0),
-                need_hard=int(level_config.get('hard', 0) or 0),
-                knowledge_level=session.knowledge_level,
-                previous_questions=question_history
-            )
-        except Exception as q_err:
-            logger.error(f"Error generating questions from teaching via Groq: {q_err}")
-            return Response(
-                {'error': 'Question generation temporarily unavailable. Please try again.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-
-        if not generated:
-            return Response(
-                {'error': 'Question generation temporarily unavailable. Please try again.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-
-        # Prepare response + session grading payload
-        questions_data = []
-        full_questions = []
-        for q_data in generated:
-            adj_time = self._adjust_time_for_pacing(
-                q_data['estimated_time'],
-                current_pacing
-            )
-            questions_data.append({
-                'difficulty': q_data['difficulty'],
-                'cognitive_operation': q_data['cognitive_operation'],
-                'estimated_time': adj_time,
-                'question': q_data['question'],
-                'options': q_data['options']
-            })
-
-            full_questions.append({
-                'difficulty': q_data['difficulty'],
-                'cognitive_operation': q_data['cognitive_operation'],
-                'estimated_time': adj_time,
-                'question': q_data['question'],
-                'options': q_data['options'],
-                'correct_index': q_data['correct_index']
-            })
-
-            # Persist to Question model so teachers can review
-            try:
-                Question.objects.create(
-                    atom=atom,
-                    difficulty=q_data['difficulty'],
-                    cognitive_operation=q_data.get('cognitive_operation', 'apply'),
-                    estimated_time=adj_time,
-                    question_text=q_data['question'],
-                    options=q_data['options'],
-                    correct_index=q_data['correct_index'],
-                )
-            except Exception as save_err:
-                print(f"Warning: failed to persist question to DB: {save_err}")
-        
-        # Update session
-        session_data['current_atom_id'] = atom.id
-        session_data['current_phase'] = 'questions'
-        session_data['questions'] = full_questions
-        # Append newly accepted questions to asked_questions_history
-        history_list = session_data.setdefault('asked_questions_history', [])
-        for fq in full_questions:
-            history_list.append(fq)
-        session.session_data = session_data
-        session.save()
-        
-        return Response({
-            'atom_id': atom.id,
-            'atom_name': atom.name,
-            'questions': questions_data,
-            'total_questions': len(questions_data),
-            'current_pacing': current_pacing
-        })
     
     def _get_question_distribution(self, knowledge_level, pacing):
         """Get question distribution based on level and pacing"""
@@ -2718,7 +2748,7 @@ class GenerateFinalChallengeView(APIView):
                 previous_questions=question_history
             )
         except Exception as q_err:
-            logger.error(f"Error generating final challenge questions via Groq: {q_err}")
+            logger.error(f"Error generating final challenge questions via OpenRouter: {q_err}")
             return Response(
                 {'error': 'Question generation temporarily unavailable. Please try again.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
@@ -3435,7 +3465,7 @@ class GenerateConceptFinalChallengeView(APIView):
                     q['source_atom_name'] = atom.name
                 all_questions.extend(qs)
         except Exception as q_err:
-            logger.error(f"Error generating concept final challenge via Groq: {q_err}")
+            logger.error(f"Error generating concept final challenge via OpenRouter: {q_err}")
             return Response(
                 {'error': 'Question generation temporarily unavailable. Please try again.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE

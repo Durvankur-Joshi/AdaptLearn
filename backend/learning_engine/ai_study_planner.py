@@ -1,26 +1,17 @@
 # backend/accounts/ai_planner.py
-import google.generativeai as genai
+import logging
 import os
 import json
 import re
 from datetime import date, timedelta
+from .openrouter_client import call_openrouter, parse_json_from_text
 
-# Configure Gemini
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+logger = logging.getLogger('learning_engine.ai_study_planner')
 
-# List available models (for debugging)
-try:
-    for m in genai.list_models():
-        print(f"Available model: {m.name}")
-except Exception as e:
-    print(f"Error listing models: {e}")
-
-# Use a valid model - gemini-1.5-flash or gemini-1.5-pro
-model = genai.GenerativeModel("gemini-2.0-flash")  # Changed from gemini-2.5-flash
 
 def generate_subtopics(subject, goal, num_topics=8):
     """
-    Generate subtopics for a given subject using Gemini AI
+    Generate subtopics for a given subject using OpenRouter.
     
     Args:
         subject: The subject name (e.g., "Mathematics", "Physics")
@@ -50,34 +41,29 @@ def generate_subtopics(subject, goal, num_topics=8):
     """
 
     try:
-        print(f"Generating topics for {subject}...")
-        response = model.generate_content(prompt)
-        
-        # Get the response text
-        response_text = response.text
-        print(f"Raw response: {response_text[:200]}...")  # Debug print
-        
-        # Clean the response - remove markdown code blocks if present
-        cleaned_text = clean_json_response(response_text)
-        
-        # Parse JSON
-        try:
-            topics = json.loads(cleaned_text)
-            if isinstance(topics, list) and len(topics) > 0:
-                print(f"Successfully generated {len(topics)} topics")
-                return topics[:num_topics]  # Ensure we don't exceed requested number
-        except json.JSONDecodeError as e:
-            print(f"JSON decode error: {e}")
-            # Try to extract array using regex as fallback
-            topics = extract_topics_from_text(response_text)
-            if topics:
-                return topics[:num_topics]
-        
-        # If all else fails, return default topics
+        raw_text = call_openrouter(
+            prompt=prompt,
+            system_prompt="You are an expert curriculum designer. Output valid JSON array of strings only.",
+            temperature=0.3,
+            max_tokens=400
+        )
+        parsed = parse_json_from_text(raw_text)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            cleaned = [str(t).strip() for t in parsed if t and str(t).strip()]
+            if cleaned:
+                return cleaned[:num_topics]
+        elif isinstance(parsed, dict):
+            for val in parsed.values():
+                if isinstance(val, list) and len(val) > 0:
+                    return [str(t).strip() for t in val if t and str(t).strip()][:num_topics]
+
+        topics = extract_topics_from_text(raw_text)
+        if topics:
+            return topics[:num_topics]
+
         return get_default_topics(subject)
-        
     except Exception as e:
-        print(f"Error generating topics: {e}")
+        logger.error(f"OpenRouter error generating study planner topics for {subject}: {e}")
         return get_default_topics(subject)
 
 def clean_json_response(text):

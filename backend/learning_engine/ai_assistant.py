@@ -1,49 +1,58 @@
 # learning_engine/ai_assistant.py
+"""
+Adaptive AI Tutor / Assistant powered by centralized OpenRouter integration.
+"""
 
-import google.generativeai as genai
-from django.conf import settings
+import logging
+from .openrouter_client import call_openrouter
 
-
-# Configure Gemini
-genai.configure(api_key=settings.GOOGLE_API_KEY)
-
-model = genai.GenerativeModel("gemini-3-flash-preview")
+logger = logging.getLogger('learning_engine.ai_assistant')
 
 
 def generate_ai_response(question, topic, level, accuracy=None):
     """
-    Core Learning Engine Logic
+    Core Learning Engine Logic - AI Doubt Solver
     """
-
     # Adaptive Level Based on Accuracy (Optional)
     if accuracy is not None:
-        if accuracy < 50:
-            level = "Beginner"
-        elif accuracy < 80:
-            level = "Intermediate"
-        else:
-            level = "Advanced"
+        try:
+            acc_val = float(accuracy)
+            if acc_val < 50:
+                level = "Beginner"
+            elif acc_val < 80:
+                level = "Intermediate"
+            else:
+                level = "Advanced"
+        except (ValueError, TypeError):
+            pass
 
     difficulty_instruction = {
-        "Beginner": "Explain in very simple language using real-life analogy.",
+        "Beginner": "Explain in very simple language using a real-life analogy.",
         "Intermediate": "Explain clearly with one technical example.",
         "Advanced": "Explain deeply with edge cases and complexity."
     }
 
     prompt = f"""
-    You are an adaptive AI tutor.
+You are an adaptive AI tutor.
 
-    Student Level: {level}
-    Topic: {topic}
+Student Level: {level}
+Topic: {topic}
 
-    {difficulty_instruction.get(level)}
+{difficulty_instruction.get(level, 'Explain clearly and step-by-step.')}
 
-    Question: {question}
+Question: {question}
 
-    Only answer if the question is related to academic syllabus.
-    Keep answer under 200 words.
-    """
+Only answer if the question is related to academic syllabus.
+Keep answer under 200 words.
+"""
 
-    response = model.generate_content(prompt)
-
-    return response.text
+    try:
+        return call_openrouter(
+            prompt=prompt,
+            system_prompt="You are an adaptive AI tutor. Provide concise, high-quality explanations.",
+            temperature=0.4,
+            max_tokens=400
+        )
+    except Exception as e:
+        logger.error(f"AI Assistant OpenRouter call failed: {e}")
+        return f"I'm sorry, I could not process your question about {topic} right now. Please try again in a moment."

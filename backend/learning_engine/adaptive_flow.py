@@ -14,17 +14,20 @@
 # ─────────────────────────────────────────────────────────────
 
 import json
+import logging
 import random
 import re
 from typing import Dict, List, Optional, Tuple, Any
 from django.conf import settings
-from groq import Groq
 from .models import TeachingAtomState, LearningPhase
 from .knowledge_tracing import calculate_updated_mastery, classify_error_type
 from .pacing_engine import (
     PacingEngine, PacingContext, PacingDecision, NextAction,
     PacingResult, FatigueLevel,
 )
+from .openrouter_client import call_openrouter, parse_json_from_text
+
+logger = logging.getLogger('learning_engine.adaptive_flow')
 
 
 # ════════════════════════════════════════════════════════════════
@@ -51,11 +54,6 @@ class AdaptiveLearningEngine:
     """
     
     def __init__(self):
-        self.groq_client = None
-        groq_key = getattr(settings, 'GROQ_API_KEY', '')
-        if groq_key:
-            self.groq_client = Groq(api_key=groq_key)
-        
         self.pacing_engine = PacingEngine()
 
     # ════════════════════════════════════════════════════════════════
@@ -871,9 +869,6 @@ class AdaptiveLearningEngine:
         else:
             error_focus = None
         
-        if not self.groq_client:
-            return self._get_fallback_content(atom_name, concept, knowledge_level, error_focus)
-        
         level_descriptions = {
             'zero': "Complete beginner - needs fundamental concepts explained from scratch",
             'beginner': "Has basic understanding but needs clear explanations and examples",
@@ -976,25 +971,19 @@ Return the result as a strict JSON object with exactly these keys:
 """
         
         try:
-            response = self.groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
+            raw_text = call_openrouter(
+                prompt=prompt,
+                system_prompt="You are an expert tutor. Generate valid JSON only.",
                 temperature=0.3,
-                max_tokens=800,
+                max_tokens=900
             )
-            
-            raw_text = response.choices[0].message.content
-            if "```" in raw_text:
-                raw_text = raw_text.split("```")[1]
-                if raw_text.startswith("json"):
-                    raw_text = raw_text[4:]
-            
-            # Sanitize control characters inside JSON string values
-            raw_text = re.sub(r'[\x00-\x1f\x7f]', lambda m: ' ' if m.group() in ('\n', '\r', '\t') else '', raw_text)
-            
-            return json.loads(raw_text.strip())
+            parsed = parse_json_from_text(raw_text)
+            if isinstance(parsed, dict) and "explanation" in parsed:
+                return parsed
+            logger.error(f"OpenRouter returned invalid teaching JSON: {raw_text[:200]}")
+            return self._get_fallback_content(atom_name, concept, knowledge_level, error_focus)
         except Exception as e:
-            print(f"Warning: Could not generate teaching content: {e}")
+            logger.error(f"OpenRouter teaching content generation failed for {atom_name}: {e}")
             return self._get_fallback_content(atom_name, concept, knowledge_level, error_focus)
     
     def _get_error_focus(self, error_types: List[str]) -> List[str]:

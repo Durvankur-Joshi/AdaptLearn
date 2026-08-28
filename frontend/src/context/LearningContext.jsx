@@ -49,6 +49,8 @@ export const LearningProvider = ({ children }) => {
 
     // Race-condition guard: track latest generation request
     const latestQuestionGenId = useRef(0);
+    // In-flight request deduplication map (prevents identical concurrent network calls)
+    const inFlightRequests = useRef({});
 
     // Generate atoms for a concept (no questions)
     const generateConcept = useCallback(async (subject, concept, knowledgeLevel = 'intermediate') => {
@@ -70,36 +72,47 @@ export const LearningProvider = ({ children }) => {
         }
     }, []);
 
-    // Start teaching session for a concept
+    // Start teaching session for a concept with in-flight deduplication
     const startTeachingSession = useCallback(async (conceptId, level = 'intermediate') => {
+        const reqKey = `start_session_${conceptId}_${level}`;
+        if (inFlightRequests.current[reqKey]) {
+            return inFlightRequests.current[reqKey];
+        }
+
         setLoading(true);
         setKnowledgeLevel(level);
         setAnswers([]);
         setAtomMastery(0.0);
         setPacingDecision('stay');
         
-        try {
-            const response = await axios.post('/auth/api/start-teaching-session/', {
-                concept_id: conceptId,
-                knowledge_level: level
-            });
-            
-            setCurrentSession(response.data);
-            
-            // If there's a current atom, set it
-            if (response.data.current_atom) {
-                setCurrentAtom(response.data.current_atom);
+        const promise = (async () => {
+            try {
+                const response = await axios.post('/auth/api/start-teaching-session/', {
+                    concept_id: conceptId,
+                    knowledge_level: level
+                });
+                
+                setCurrentSession(response.data);
+                
+                // If there's a current atom, set it
+                if (response.data.current_atom) {
+                    setCurrentAtom(response.data.current_atom);
+                }
+                
+                return { success: true, data: response.data };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: error.response?.data?.error || 'Failed to start session'
+                };
+            } finally {
+                delete inFlightRequests.current[reqKey];
+                setLoading(false);
             }
-            
-            return { success: true, data: response.data };
-        } catch (error) {
-            return {
-                success: false,
-                error: error.response?.data?.error || 'Failed to start session'
-            };
-        } finally {
-            setLoading(false);
-        }
+        })();
+
+        inFlightRequests.current[reqKey] = promise;
+        return promise;
     }, []);
 
     // Get teaching content for an atom
@@ -149,55 +162,77 @@ export const LearningProvider = ({ children }) => {
         }
     }, []);
 
-    // Generate questions based on teaching content
+    // Generate questions based on teaching content with in-flight deduplication
     const generateQuestionsFromTeaching = useCallback(async ({ session_id, atom_id, force_new = false }) => {
+        const reqKey = `teaching_questions_${session_id}_${atom_id}_${force_new}`;
+        if (inFlightRequests.current[reqKey]) {
+            return inFlightRequests.current[reqKey];
+        }
+
         setLoading(true);
         const requestId = ++latestQuestionGenId.current;
-        try {
-            const response = await axios.post('/auth/api/generate-questions-from-teaching/', {
-                session_id: session_id,
-                atom_id: atom_id,
-                force_new: force_new
-            });
-            
-            // Only apply state if this is still the latest request (prevents race condition)
-            if (requestId === latestQuestionGenId.current) {
-                setCurrentQuestions(response.data.questions || []);
-                setCurrentQuestionIndex(0);
+        const promise = (async () => {
+            try {
+                const response = await axios.post('/auth/api/generate-questions-from-teaching/', {
+                    session_id: session_id,
+                    atom_id: atom_id,
+                    force_new: force_new
+                });
                 
-                // Start timer for first question
-                questionStartTime.current = Date.now();
+                // Only apply state if this is still the latest request (prevents race condition)
+                if (requestId === latestQuestionGenId.current) {
+                    setCurrentQuestions(response.data.questions || []);
+                    setCurrentQuestionIndex(0);
+                    
+                    // Start timer for first question
+                    questionStartTime.current = Date.now();
+                }
+                
+                return { success: true, data: response.data };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: error.response?.data?.error || 'Failed to generate questions'
+                };
+            } finally {
+                delete inFlightRequests.current[reqKey];
+                if (requestId === latestQuestionGenId.current) {
+                    setLoading(false);
+                }
             }
-            
-            return { success: true, data: response.data };
-        } catch (error) {
-            return {
-                success: false,
-                error: error.response?.data?.error || 'Failed to generate questions'
-            };
-        } finally {
-            if (requestId === latestQuestionGenId.current) {
-                setLoading(false);
-            }
-        }
+        })();
+
+        inFlightRequests.current[reqKey] = promise;
+        return promise;
     }, []);
 
-    // Generate initial diagnostic quiz
+    // Generate initial diagnostic quiz with in-flight deduplication
     const generateInitialQuiz = useCallback(async ({ session_id }) => {
-        setLoading(true);
-        try {
-            const response = await axios.post('/auth/api/initial-quiz/', {
-                session_id: session_id
-            });
-            return { success: true, data: response.data };
-        } catch (error) {
-            return {
-                success: false,
-                error: error.response?.data?.error || 'Failed to generate initial quiz'
-            };
-        } finally {
-            setLoading(false);
+        const reqKey = `initial_quiz_${session_id}`;
+        if (inFlightRequests.current[reqKey]) {
+            return inFlightRequests.current[reqKey];
         }
+
+        setLoading(true);
+        const promise = (async () => {
+            try {
+                const response = await axios.post('/auth/api/initial-quiz/', {
+                    session_id: session_id
+                });
+                return { success: true, data: response.data };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: error.response?.data?.error || 'Failed to generate initial quiz'
+                };
+            } finally {
+                delete inFlightRequests.current[reqKey];
+                setLoading(false);
+            }
+        })();
+
+        inFlightRequests.current[reqKey] = promise;
+        return promise;
     }, []);
 
     const submitInitialQuizAnswer = useCallback(async ({ session_id, question_index, selected, time_taken }) => {

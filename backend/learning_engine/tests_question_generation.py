@@ -1,14 +1,28 @@
 # backend/learning_engine/tests_question_generation.py
 """
-Comprehensive test suite for the Multi-Provider Question Generation Pipeline.
-Tests Groq (Primary) + Google Gemini (Fallback) orchestration, error classification,
-smart immediate fallback on permanent errors, bounded retries on transient errors,
-intra-batch/history novelty gating, option shuffling and position balancing,
-strict correct_index validation, HTTP 503 error handling, and adaptive learning preservation.
+Comprehensive test suite for OpenRouter Question Generation Architecture.
+Covers:
+- TEST 1: Question generation via OpenRouter returns structured questions.
+- TEST 2 & 3: Novelty filtering against past session history rejects duplicates and paraphrases.
+- TEST 4 & 5: Backend option shuffling distributes correct answers across A/B/C/D and eliminates Option A bias.
+- TEST 6: Robust JSON parsing of LLM responses.
+- TEST 7: Malformed JSON handling does not crash.
+- TEST 8: Simulated duplicate candidate is rejected by NOVELTY_GATE.
+- TEST 9: Invalid/missing correct answer is rejected and never converted to 0.
+- TEST 10: Centralized question generation service is used.
+- TEST 11: Groq is no longer used in question generation.
+- TEST 12: Gemini is no longer used in question generation.
+- TEST 13: Missing API_KEY raises clear configuration error.
+- TEST 14: Missing MODEL raises clear configuration error.
+- TEST 15: Model name is read dynamically from environment variable MODEL.
+- TEST 16: No sentence-transformers or local embedding models loaded.
+- Adaptive learning engine mastery/accuracy calculation remains functional.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 from django.test import TestCase
+from django.conf import settings
 from django.contrib.auth.models import User
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -16,26 +30,60 @@ from rest_framework import status
 from accounts.models import Concept, TeachingAtom, LearningSession, StudentProgress, LearningProfile
 from learning_engine.question_generator import (
     QuestionGenerator,
-    GroqQuestionProvider,
-    GeminiQuestionProvider,
+    OpenRouterQuestionProvider,
     QuestionGenerationError,
     normalize_question_text,
     calculate_question_similarity,
     is_novel_question,
     shuffle_and_balance_options,
     _validate_single_question,
+    safe_parse_json_questions,
     QUESTION_SIMILARITY_THRESHOLD
 )
 from learning_engine.knowledge_tracing import calculate_updated_mastery
 
 
-class LightweightSimilarityAndSchemaTests(TestCase):
-    """Unit tests for novelty detection, schema validation, and option shuffling."""
+class ArchitectureAndConfigurationTests(TestCase):
+    """Tests for environment configuration, model dynamics, and provider retirement."""
 
     def test_no_sentence_transformers_or_local_embeddings(self):
-        """TEST 14: Ensure no sentence-transformers or local embedding models are imported."""
+        """TEST 16: Ensure no sentence-transformers or local embedding models are imported."""
         import sys
         self.assertNotIn('sentence_transformers', sys.modules)
+
+    def test_missing_api_key_raises_configuration_error(self):
+        """TEST 13: Temporarily missing API_KEY raises clear configuration error."""
+        provider = OpenRouterQuestionProvider(api_key="", model_name="test-model")
+        with self.assertRaises(QuestionGenerationError) as ctx:
+            provider.generate_candidate_questions("Generate 1 question", 1)
+        self.assertIn("API_KEY", str(ctx.exception))
+
+    def test_missing_model_raises_configuration_error(self):
+        """TEST 14: Temporarily missing MODEL raises clear configuration error."""
+        provider = OpenRouterQuestionProvider(api_key="valid-key", model_name="")
+        with self.assertRaises(QuestionGenerationError) as ctx:
+            provider.generate_candidate_questions("Generate 1 question", 1)
+        self.assertIn("MODEL", str(ctx.exception))
+
+    def test_model_name_is_dynamic_and_not_hardcoded(self):
+        """TEST 15: Verify model name is read dynamically from MODEL environment variable."""
+        custom_model = "test-custom-provider/model-v1:free"
+        provider = OpenRouterQuestionProvider(api_key="test-key", model_name=custom_model)
+        self.assertEqual(provider.model_name, custom_model)
+
+    def test_groq_and_gemini_removed_from_question_generator(self):
+        """TEST 11 & 12: Verify Groq and Gemini are no longer used in question_generator.py."""
+        import inspect
+        import learning_engine.question_generator as qg_mod
+        src = inspect.getsource(qg_mod)
+        self.assertNotIn("GroqQuestionProvider", src)
+        self.assertNotIn("GeminiQuestionProvider", src)
+        self.assertNotIn("llama-3.1-8b-instant", src)
+        self.assertNotIn("gemini-2.5-flash", src)
+
+
+class LightweightSimilarityAndSchemaTests(TestCase):
+    """Unit tests for novelty detection, schema validation, and option shuffling."""
 
     def test_normalize_question_text(self):
         """Test normalization: casing, punctuation, whitespace."""
@@ -44,7 +92,7 @@ class LightweightSimilarityAndSchemaTests(TestCase):
         self.assertEqual(normalized, "what is cache mapping and how does it work")
 
     def test_exact_and_near_duplicate_similarity(self):
-        """Test exact and semantically similar questions are flagged with high similarity."""
+        """TEST 8: Test exact and semantically similar questions are flagged by NOVELTY_GATE."""
         q1 = "What is the primary purpose of cache mapping?"
         q2 = "What does cache mapping mean?"
         q3 = "Which statement best describes the primary purpose of cache mapping?"
@@ -59,10 +107,15 @@ class LightweightSimilarityAndSchemaTests(TestCase):
         sim_diff = calculate_question_similarity(q1, q4)
         self.assertLess(sim_diff, QUESTION_SIMILARITY_THRESHOLD)
 
-    def test_validate_single_question_strict_correct_index(self):
-        """TEST 8: Missing or invalid correct_index is rejected and NEVER defaulted to 0."""
-        # Valid question
-        valid_q = {
+        # Novelty gate rejection check
+        is_novel, sim, matched = is_novel_question(q3, [q1])
+        self.assertFalse(is_novel)
+        self.assertEqual(matched, q1)
+
+    def test_validate_single_question_strict_correct_index_and_answer(self):
+        """TEST 9: Missing or invalid correct answer is rejected and NEVER defaulted to 0."""
+        # Valid with correct_index
+        valid_q1 = {
             "difficulty": "easy",
             "cognitive_operation": "apply",
             "estimated_time": 40,
@@ -70,19 +123,32 @@ class LightweightSimilarityAndSchemaTests(TestCase):
             "options": ["Slot 0", "Slot 1", "Slot 2", "Slot 3"],
             "correct_index": 2
         }
-        res = _validate_single_question(valid_q)
-        self.assertIsNotNone(res)
-        self.assertEqual(res["correct_index"], 2)
+        res1 = _validate_single_question(valid_q1)
+        self.assertIsNotNone(res1)
+        self.assertEqual(res1["correct_index"], 2)
 
-        # Missing correct_index -> MUST BE REJECTED (None)
-        missing_ci = {
+        # Valid with correct_answer string
+        valid_q2 = {
+            "difficulty": "easy",
+            "cognitive_operation": "apply",
+            "estimated_time": 40,
+            "question": "Where does block 0x10 map in a direct-mapped cache?",
+            "options": ["Slot 0", "Slot 1", "Slot 2", "Slot 3"],
+            "correct_answer": "Slot 2"
+        }
+        res2 = _validate_single_question(valid_q2)
+        self.assertIsNotNone(res2)
+        self.assertEqual(res2["correct_index"], 2)
+
+        # Missing correct_answer / correct_index -> MUST BE REJECTED (None)
+        missing_ca = {
             "difficulty": "easy",
             "cognitive_operation": "apply",
             "estimated_time": 40,
             "question": "Where does block 0x10 map in a direct-mapped cache?",
             "options": ["Slot 0", "Slot 1", "Slot 2", "Slot 3"]
         }
-        self.assertIsNone(_validate_single_question(missing_ci))
+        self.assertIsNone(_validate_single_question(missing_ca))
 
         # Invalid out-of-range correct_index -> MUST BE REJECTED (None)
         out_of_range_ci = {
@@ -95,19 +161,19 @@ class LightweightSimilarityAndSchemaTests(TestCase):
         }
         self.assertIsNone(_validate_single_question(out_of_range_ci))
 
-        # Non-numeric correct_index -> MUST BE REJECTED (None)
-        non_numeric_ci = {
+        # Non-matching correct_answer string -> MUST BE REJECTED (None)
+        non_matching_ca = {
             "difficulty": "easy",
             "cognitive_operation": "apply",
             "estimated_time": 40,
             "question": "Where does block 0x10 map in a direct-mapped cache?",
             "options": ["Slot 0", "Slot 1", "Slot 2", "Slot 3"],
-            "correct_index": "invalid"
+            "correct_answer": "Non-existent option"
         }
-        self.assertIsNone(_validate_single_question(non_numeric_ci))
+        self.assertIsNone(_validate_single_question(non_matching_ca))
 
     def test_shuffle_and_balance_options(self):
-        """TEST 9 & 10: Options are shuffled, correct_index accurately maps, positions vary across A/B/C/D."""
+        """TEST 4 & 5: Options are shuffled, correct_index accurately maps, positions vary across A/B/C/D."""
         batch = [
             {"question": "Q1", "options": ["Correct_A", "W1", "W2", "W3"], "correct_index": 0},
             {"question": "Q2", "options": ["Correct_B", "W1", "W2", "W3"], "correct_index": 0},
@@ -128,58 +194,69 @@ class LightweightSimilarityAndSchemaTests(TestCase):
         assigned_indices = {q['correct_index'] for q in shuffled_batch}
         self.assertEqual(assigned_indices, {0, 1, 2, 3})
 
+    def test_json_parsing_valid_and_malformed(self):
+        """TEST 6 & 7: Test safe_parse_json_questions on valid, markdown-fenced, and malformed JSON."""
+        # Valid JSON with questions list
+        raw_valid = '{"questions": [{"question": "Q1 text?", "options": ["A", "B", "C", "D"], "correct_index": 0}]}'
+        parsed1 = safe_parse_json_questions(raw_valid)
+        self.assertEqual(len(parsed1), 1)
+        self.assertEqual(parsed1[0]['question'], "Q1 text?")
 
-class MultiProviderOrchestrationTests(TestCase):
-    """Unit tests for Groq (Primary) + Gemini (Fallback) orchestration logic."""
+        # Markdown-wrapped JSON
+        raw_md = '```json\n{"questions": [{"question": "Q2 text?", "options": ["A", "B", "C", "D"], "correct_index": 1}]}\n```'
+        parsed2 = safe_parse_json_questions(raw_md)
+        self.assertEqual(len(parsed2), 1)
+        self.assertEqual(parsed2[0]['question'], "Q2 text?")
+
+        # Malformed / broken JSON does not crash and returns empty list
+        raw_malformed = 'This is random text without JSON.'
+        parsed3 = safe_parse_json_questions(raw_malformed)
+        self.assertEqual(parsed3, [])
+
+
+class OpenRouterQuestionGeneratorTests(TestCase):
+    """Unit and integration tests for OpenRouter question generation orchestrator."""
 
     def setUp(self):
-        self.mock_groq_prov = MagicMock(spec=GroqQuestionProvider)
-        self.mock_groq_prov.provider_name = "Groq"
-        self.mock_groq_prov.model_name = "llama-3.1-8b-instant"
-        self.mock_groq_prov.is_permanent_error = GroqQuestionProvider.is_permanent_error.__get__(self.mock_groq_prov)
+        self.mock_provider = MagicMock(spec=OpenRouterQuestionProvider)
+        self.mock_provider.api_key = "test-openrouter-key"
+        self.mock_provider.model_name = "test-model:free"
+        self.mock_provider.is_permanent_error.return_value = False
 
-        self.mock_gemini_prov = MagicMock(spec=GeminiQuestionProvider)
-        self.mock_gemini_prov.provider_name = "Gemini"
-        self.mock_gemini_prov.model_name = "gemini-2.5-flash"
-        self.mock_gemini_prov.is_permanent_error = GeminiQuestionProvider.is_permanent_error.__get__(self.mock_gemini_prov)
-
-        self.generator = QuestionGenerator(
-            groq_provider=self.mock_groq_prov,
-            gemini_provider=self.mock_gemini_prov
-        )
+        self.generator = QuestionGenerator(provider=self.mock_provider)
 
         self.teaching_content = {
-            "explanation": "Cache mapping defines memory address to cache line correspondence.",
-            "analogy": "Assigned lockers.",
-            "examples": ["Direct", "Associative", "Set-associative"]
+            "explanation": "Arrays store elements in contiguous memory locations.",
+            "analogy": "Consecutive mailboxes.",
+            "examples": ["Direct indexing arr[i]"]
         }
 
-    def test_groq_succeeds_gemini_not_called(self):
-        """TEST 1: When Groq succeeds on attempt 1, Gemini is never called."""
-        groq_candidates = [
+    def test_openrouter_candidate_generation_success(self):
+        """TEST 1: Verify successful OpenRouter candidate batch generation and return."""
+        candidates = [
             {
                 "difficulty": "easy",
                 "cognitive_operation": "apply",
                 "estimated_time": 40,
-                "question": "In direct mapping, how is the line index determined?",
-                "options": ["Modulo calculation", "Random selection", "LRU hash", "Disk lookup"],
-                "correct_index": 0
+                "question": "What is the primary memory property of arrays?",
+                "options": ["Contiguous memory allocation", "Linked pointers", "Dynamic hashing", "Tree hierarchy"],
+                "correct_answer": "Contiguous memory allocation"
             },
             {
                 "difficulty": "medium",
                 "cognitive_operation": "analyze",
                 "estimated_time": 60,
-                "question": "What happens when multiple memory blocks map to the exact same cache line?",
-                "options": ["Conflict misses cause thrashing", "Capacity doubles", "CPU halts", "Addresses merge"],
-                "correct_index": 0
+                "question": "Why does array index lookup operate in O(1) time?",
+                "options": ["Offset formula base + i * size", "Binary search", "Hash table lookup", "Pointer traversal"],
+                "correct_answer": "Offset formula base + i * size"
             }
         ]
-        self.mock_groq_prov.generate_candidate_questions.return_value = groq_candidates
+        self.mock_provider.generate_candidate_questions.return_value = candidates
 
         questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
+            subject="Data Structures",
+            concept="Arrays",
+            atom="Contiguous Memory",
             teaching_content=self.teaching_content,
             need_easy=1,
             need_medium=1,
@@ -188,174 +265,76 @@ class MultiProviderOrchestrationTests(TestCase):
         )
 
         self.assertEqual(len(questions), 2)
-        self.assertEqual(self.mock_groq_prov.generate_candidate_questions.call_count, 1)
-        self.mock_gemini_prov.generate_candidate_questions.assert_not_called()
+        self.assertEqual(self.mock_provider.generate_candidate_questions.call_count, 1)
 
-    def test_groq_404_model_not_found_immediately_calls_gemini(self):
-        """TEST 2: When Groq returns 404 model_not_found, it switches to Gemini immediately without retrying Groq."""
-        self.mock_groq_prov.generate_candidate_questions.side_effect = Exception("404 - model_not_found: llama-3.3-70b-versatile does not exist")
+    def test_repeated_generation_applies_novelty_gate(self):
+        """TEST 2 & 3: Novelty gate rejects duplicates against history across generation attempts."""
+        prev_q = {"question": "What is the primary memory property of arrays?"}
 
-        gemini_candidates = [
+        # Attempt 1 returns 1 duplicate and 1 novel candidate
+        attempt1_candidates = [
             {
                 "difficulty": "easy",
                 "cognitive_operation": "apply",
                 "estimated_time": 40,
-                "question": "How does fully associative cache placement differ from direct mapping?",
-                "options": ["Block can occupy any line", "No tag bits required", "Only one line available", "DRAM is bypassed"],
-                "correct_index": 0
-            }
-        ]
-        self.mock_gemini_prov.generate_candidate_questions.return_value = gemini_candidates
-
-        questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
-            teaching_content=self.teaching_content,
-            need_easy=1,
-            need_medium=0,
-            need_hard=0,
-            previous_questions=[]
-        )
-
-        self.assertEqual(len(questions), 1)
-        # Groq called exactly once (because 404 is a permanent error and immediately switches to Gemini)
-        self.assertEqual(self.mock_groq_prov.generate_candidate_questions.call_count, 1)
-        # Gemini was called to generate the question
-        self.assertEqual(self.mock_gemini_prov.generate_candidate_questions.call_count, 1)
-
-    def test_groq_timeout_retries_then_gemini_fallback(self):
-        """TEST 3: When Groq encounters a transient timeout, it retries once, then falls back to Gemini."""
-        self.mock_groq_prov.generate_candidate_questions.side_effect = Exception("ReadTimeout connection timed out")
-
-        gemini_candidates = [
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "Why does a 2-way set-associative cache reduce conflict misses?",
-                "options": ["Provides two placement options per set", "Doubles clock frequency", "Eliminates cache tags", "Replaces RAM"],
-                "correct_index": 0
-            }
-        ]
-        self.mock_gemini_prov.generate_candidate_questions.return_value = gemini_candidates
-
-        questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
-            teaching_content=self.teaching_content,
-            need_easy=1,
-            need_medium=0,
-            need_hard=0,
-            previous_questions=[]
-        )
-
-        self.assertEqual(len(questions), 1)
-        # Groq retried up to GROQ_MAX_ATTEMPTS (2)
-        self.assertEqual(self.mock_groq_prov.generate_candidate_questions.call_count, 2)
-        # Gemini was invoked and succeeded
-        self.assertEqual(self.mock_gemini_prov.generate_candidate_questions.call_count, 1)
-
-    def test_groq_invalid_json_retries_then_gemini_fallback(self):
-        """TEST 4: When Groq returns invalid JSON, it retries and falls back to Gemini if unrecovered."""
-        self.mock_groq_prov.generate_candidate_questions.side_effect = Exception("JSONDecodeError: Expecting value: line 1 column 1")
-
-        gemini_candidates = [
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "What is the function of the cache line offset field?",
-                "options": ["Selects specific byte or word within line", "Identifies cache set", "Compares tag directory", "Controls write buffer"],
-                "correct_index": 0
-            }
-        ]
-        self.mock_gemini_prov.generate_candidate_questions.return_value = gemini_candidates
-
-        questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
-            teaching_content=self.teaching_content,
-            need_easy=1,
-            need_medium=0,
-            need_hard=0,
-            previous_questions=[]
-        )
-
-        self.assertEqual(len(questions), 1)
-        self.assertEqual(self.mock_groq_prov.generate_candidate_questions.call_count, 2)
-        self.assertEqual(self.mock_gemini_prov.generate_candidate_questions.call_count, 1)
-
-    def test_groq_partial_duplicate_gemini_fills_missing(self):
-        """TEST 5 & 6: Groq produces 1 valid + 1 duplicate question; Gemini generates the missing 1 question."""
-        # Groq returns 1 novel question and 1 duplicate
-        groq_resp = [
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "How does direct mapping determine line index?",
-                "options": ["Modulo address", "Random", "LRU", "Disk"],
-                "correct_index": 0
+                "question": "What is the primary memory property of arrays?",  # Duplicate!
+                "options": ["Contiguous memory", "Linked nodes", "Hash table", "Trees"],
+                "correct_answer": "Contiguous memory"
             },
             {
                 "difficulty": "medium",
                 "cognitive_operation": "analyze",
                 "estimated_time": 60,
-                "question": "What is cache mapping in computer systems?",  # Duplicate of history
-                "options": ["A mechanism for placing memory blocks in cache", "A disk format", "A CPU routine", "A protocol"],
-                "correct_index": 0
+                "question": "Why does array index lookup operate in O(1) time?",  # Novel
+                "options": ["Base plus offset computation", "Binary search", "Hashing", "Linear scan"],
+                "correct_answer": "Base plus offset computation"
             }
         ]
-        # On attempt 2, Groq fails
-        self.mock_groq_prov.generate_candidate_questions.side_effect = [
-            groq_resp,
-            Exception("Groq rate limit 429")
-        ]
 
-        # Gemini produces the missing 1 medium question
-        gemini_resp = [
+        # Attempt 2 produces the missing 1 easy question
+        attempt2_candidates = [
             {
-                "difficulty": "medium",
-                "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "Under what access pattern will direct-mapped cache suffer severe thrashing?",
-                "options": ["Alternating access to blocks mapping to same slot", "Purely sequential access", "Single block loops", "Zero-stride array access"],
-                "correct_index": 0
+                "difficulty": "easy",
+                "cognitive_operation": "apply",
+                "estimated_time": 40,
+                "question": "How are elements arranged physically in array storage?",  # Novel replacement
+                "options": ["In consecutive memory addresses", "Scattered randomly", "In linked blocks", "On secondary disk only"],
+                "correct_answer": "In consecutive memory addresses"
             }
         ]
-        self.mock_gemini_prov.generate_candidate_questions.return_value = gemini_resp
 
-        history = [{"question": "What is cache mapping in computer systems?"}]
+        self.mock_provider.generate_candidate_questions.side_effect = [
+            attempt1_candidates,
+            attempt2_candidates
+        ]
+
         questions = self.generator.generate_questions_from_teaching(
-            subject="Computer Architecture",
-            concept="Memory Organization",
-            atom="Cache Mapping",
+            subject="Data Structures",
+            concept="Arrays",
+            atom="Contiguous Memory",
             teaching_content=self.teaching_content,
             need_easy=1,
             need_medium=1,
             need_hard=0,
-            previous_questions=history
+            previous_questions=[prev_q]
         )
 
         self.assertEqual(len(questions), 2)
-        # Verify 1 came from Groq and 1 from Gemini
+        self.assertEqual(self.mock_provider.generate_candidate_questions.call_count, 2)
         q_texts = [q['question'] for q in questions]
-        self.assertIn("How does direct mapping determine line index?", q_texts)
-        self.assertIn("Under what access pattern will direct-mapped cache suffer severe thrashing?", q_texts)
+        self.assertNotIn("What is the primary memory property of arrays?", q_texts)
+        self.assertIn("Why does array index lookup operate in O(1) time?", q_texts)
+        self.assertIn("How are elements arranged physically in array storage?", q_texts)
 
-    def test_both_providers_fail_raises_question_generation_error(self):
-        """TEST 7: When both Groq and Gemini fail, raise QuestionGenerationError without static fallback."""
-        self.mock_groq_prov.generate_candidate_questions.side_effect = Exception("Groq down")
-        self.mock_gemini_prov.generate_candidate_questions.side_effect = Exception("Gemini down")
+    def test_provider_exhaustion_raises_question_generation_error(self):
+        """Verify that provider failure across all attempts raises QuestionGenerationError without static fallback."""
+        self.mock_provider.generate_candidate_questions.side_effect = Exception("OpenRouter 500 error")
 
         with self.assertRaises(QuestionGenerationError):
             self.generator.generate_questions_from_teaching(
-                subject="Computer Architecture",
-                concept="Memory Organization",
-                atom="Cache Mapping",
+                subject="Data Structures",
+                concept="Arrays",
+                atom="Contiguous Memory",
                 teaching_content=self.teaching_content,
                 need_easy=1,
                 need_medium=1,
@@ -377,7 +356,8 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
         self.concept = Concept.objects.create(
             name="Arrays",
             subject="Data Structures",
-            difficulty="easy"
+            difficulty="easy",
+            created_by=self.user
         )
         self.atom = TeachingAtom.objects.create(
             name="Contiguous Memory",
@@ -399,123 +379,73 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
             session_data={}
         )
 
-    @patch.object(GroqQuestionProvider, 'generate_candidate_questions')
-    def test_force_new_behavior_and_novelty(self, mock_groq_gen):
-        """TEST 11: force_new=False reuses uncompleted batch; force_new=True generates fresh novel questions."""
-        batch1 = [
+    @patch.object(OpenRouterQuestionProvider, 'generate_candidate_questions')
+    def test_initial_quiz_endpoint_generates_questions(self, mock_gen):
+        """TEST 10: Verify /auth/api/initial-quiz/ uses centralized QuestionGenerator."""
+        candidates = [
             {
                 "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "How is the physical memory address of array element arr[i] computed?",
-                "options": ["base_address + i * element_size", "base_address * i", "base_address + i", "pointer_hash(i)"],
-                "correct_index": 0
+                "cognitive_operation": "recall",
+                "estimated_time": 30,
+                "question": "What is the primary memory property of arrays?",
+                "options": ["Contiguous memory", "Linked nodes", "Dynamic hashing", "Tree hierarchy"],
+                "correct_answer": "Contiguous memory"
             },
             {
                 "difficulty": "easy",
                 "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "What primary hardware advantage results from storing elements in contiguous memory?",
-                "options": ["Spatial locality and cache line prefetching", "Automatic dynamic resizing", "Garbage collection exemption", "Zero memory overhead"],
-                "correct_index": 0
+                "estimated_time": 30,
+                "question": "How is the physical memory address of element arr[i] calculated?",
+                "options": ["base + i * size", "base * i", "base + i", "pointer_hash(i)"],
+                "correct_answer": "base + i * size"
             },
             {
                 "difficulty": "medium",
                 "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "Why does inserting an element at index 0 of an array take O(n) time?",
-                "options": ["All subsequent elements must be shifted right", "Memory must be re-initialized to zeros", "CPU cache is invalidated", "Operating system context switch occurs"],
-                "correct_index": 0
+                "estimated_time": 45,
+                "question": "Why does inserting an item at the beginning of an array take O(n) time?",
+                "options": ["All elements must be shifted", "Memory is reallocated", "CPU cache is cleared", "Page fault occurs"],
+                "correct_answer": "All elements must be shifted"
             },
             {
                 "difficulty": "medium",
                 "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "What occurs if an application writes past the allocated contiguous bounds of an array?",
-                "options": ["Buffer overflow corrupting adjacent memory", "Array automatically doubles capacity", "Compilation warning halts execution", "Index resets to zero"],
-                "correct_index": 0
+                "estimated_time": 45,
+                "question": "What hardware performance benefit arises from spatial locality in arrays?",
+                "options": ["CPU cache line prefetching", "Automatic garbage collection", "Zero fragmentation", "Thread safety"],
+                "correct_answer": "CPU cache line prefetching"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "apply",
+                "estimated_time": 45,
+                "question": "Which constant-time operation is directly enabled by contiguous allocation?",
+                "options": ["Random index access in O(1)", "Arbitrary deletion in O(1)", "Dynamic resizing", "Sorted binary search"],
+                "correct_answer": "Random index access in O(1)"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What occurs when an application writes past allocated array bounds?",
+                "options": ["Buffer overflow", "Automatic expansion", "Zeroing memory", "Compiler warning only"],
+                "correct_answer": "Buffer overflow"
             }
         ]
+        mock_gen.return_value = candidates
 
-        batch2 = [
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "In a 64-bit architecture, how many bytes separate adjacent integer elements in a contiguous array?",
-                "options": ["4 or 8 bytes depending on integer type size", "Always 1 byte", "16 bytes", "64 bytes"],
-                "correct_index": 0
-            },
-            {
-                "difficulty": "easy",
-                "cognitive_operation": "apply",
-                "estimated_time": 40,
-                "question": "Which constant-time operation is directly enabled by contiguous memory allocation?",
-                "options": ["Random index access in O(1)", "Arbitrary element deletion in O(1)", "Dynamic resizing in O(1)", "Sorted search in O(1)"],
-                "correct_index": 0
-            },
-            {
-                "difficulty": "medium",
-                "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "How does memory fragmentation prevent allocation of a large contiguous array even when total free RAM is sufficient?",
-                "options": ["No single uninterrupted memory block is large enough", "Virtual memory is disabled", "CPU registers are full", "RAM bandwidth is exceeded"],
-                "correct_index": 0
-            },
-            {
-                "difficulty": "medium",
-                "cognitive_operation": "analyze",
-                "estimated_time": 60,
-                "question": "Why do 2D matrices stored in row-major order exhibit better cache performance when traversed row by row?",
-                "options": ["Consecutive memory addresses align with cache lines", "Columns have smaller data types", "Row headers are cached in CPU", "Pointers are not dereferenced"],
-                "correct_index": 0
-            }
-        ]
-
-        mock_groq_gen.side_effect = [batch1, batch2]
-
-        # 1. First call with force_new=False
-        resp1 = self.client.post('/auth/api/generate-questions-from-teaching/', {
-            'session_id': self.session.id,
-            'atom_id': self.atom.id,
-            'force_new': False
+        resp = self.client.post('/auth/api/initial-quiz/', {
+            'session_id': self.session.id
         }, format='json')
-        self.assertEqual(resp1.status_code, 200)
-        q_set_1 = resp1.data['questions']
-        self.assertEqual(len(q_set_1), 4)
 
-        # 2. Second call with force_new=False -> should reuse existing questions
-        resp2 = self.client.post('/auth/api/generate-questions-from-teaching/', {
-            'session_id': self.session.id,
-            'atom_id': self.atom.id,
-            'force_new': False
-        }, format='json')
-        self.assertEqual(resp2.status_code, 200)
-        self.assertTrue(resp2.data.get('reused', False))
-        self.assertEqual(resp1.data['questions'][0]['question'], resp2.data['questions'][0]['question'])
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('questions', resp.data)
+        self.assertEqual(len(resp.data['questions']), 5)
 
-        # 3. Third call with force_new=True -> should generate a fresh novel set
-        resp3 = self.client.post('/auth/api/generate-questions-from-teaching/', {
-            'session_id': self.session.id,
-            'atom_id': self.atom.id,
-            'force_new': True
-        }, format='json')
-        self.assertEqual(resp3.status_code, 200)
-        self.assertFalse(resp3.data.get('reused', False))
-        q_set_3 = resp3.data['questions']
-        self.assertEqual(len(q_set_3), 4)
-
-        # Verify questions in set 3 are novel compared to set 1
-        for q3 in q_set_3:
-            is_novel, sim, _ = is_novel_question(q3, q_set_1)
-            self.assertTrue(is_novel, f"force_new=True returned duplicate: {q3['question']}")
-
-    @patch.object(GroqQuestionProvider, 'generate_candidate_questions')
-    @patch.object(GeminiQuestionProvider, 'generate_candidate_questions')
-    def test_both_providers_failing_returns_http_503(self, mock_gemini_gen, mock_groq_gen):
-        """TEST 7: When both providers fail, API returns HTTP 503 Service Unavailable."""
-        mock_groq_gen.side_effect = Exception("Groq 500 error")
-        mock_gemini_gen.side_effect = Exception("Gemini 500 error")
+    @patch.object(OpenRouterQuestionProvider, 'generate_candidate_questions')
+    def test_provider_failure_returns_http_503(self, mock_gen):
+        """Verify API returns HTTP 503 when OpenRouter fails."""
+        mock_gen.side_effect = Exception("OpenRouter down")
 
         resp = self.client.post('/auth/api/generate-questions-from-teaching/', {
             'session_id': self.session.id,
@@ -525,10 +455,75 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertIn("error", resp.data)
-        self.assertIn("temporarily unavailable", resp.data["error"])
+
+    @patch('learning_engine.question_generator.call_openrouter')
+    def test_generate_concept_view_creates_atoms_via_openrouter(self, mock_call):
+        """Verify GenerateConceptView generates atoms for new concepts using OpenRouter."""
+        mock_call.return_value = '{"atoms": ["Declaration", "Index Access", "Memory Layout", "Bounds Checking"]}'
+
+        resp = self.client.post('/auth/api/generate-concept/', {
+            'subject': 'Computer Science',
+            'concept': 'Dynamic Arrays',
+            'knowledge_level': 'intermediate'
+        }, format='json')
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('atoms', resp.data)
+        self.assertEqual(len(resp.data['atoms']), 4)
+        self.assertIn('Generated 4 atoms for Dynamic Arrays', resp.data['message'])
+
+    def test_generate_concept_view_returns_existing_atoms_without_unbound_error(self):
+        """Verify GenerateConceptView does not raise UnboundLocalError when concept already has atoms."""
+        resp = self.client.post('/auth/api/generate-concept/', {
+            'subject': 'Data Structures',
+            'concept': 'Arrays',
+            'knowledge_level': 'intermediate'
+        }, format='json')
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('atoms', resp.data)
+        self.assertEqual(len(resp.data['atoms']), 1)
+        self.assertIn('Generated 1 atoms for Arrays', resp.data['message'])
+
+    @patch('learning_engine.question_generator.call_openrouter')
+    def test_generate_concept_view_returns_503_on_atom_generation_failure(self, mock_call):
+        """Verify GenerateConceptView returns controlled HTTP 503 when OpenRouter fails."""
+        mock_call.side_effect = Exception("OpenRouter 503 error")
+
+        resp = self.client.post('/auth/api/generate-concept/', {
+            'subject': 'Computer Science',
+            'concept': 'Failing Concept',
+            'knowledge_level': 'intermediate'
+        }, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn('error', resp.data)
+
+    @patch('learning_engine.adaptive_flow.call_openrouter')
+    def test_adaptive_flow_generate_teaching_content_uses_openrouter(self, mock_call):
+        """Verify AdaptiveLearningEngine.generate_teaching_content uses OpenRouter."""
+        mock_call.return_value = json.dumps({
+            "explanation": "Arrays store items in contiguous memory.",
+            "example": "Shopping list in numbered rows.",
+            "analogy": "Consecutive lockers in a gym.",
+            "misconception": "Arrays resize dynamically in all languages.",
+            "practical_application": "Fast cache-friendly data processing."
+        })
+
+        from learning_engine.adaptive_flow import AdaptiveLearningEngine
+        engine = AdaptiveLearningEngine()
+        content = engine.generate_teaching_content(
+            atom_name="Contiguous Storage",
+            subject="Data Structures",
+            concept="Arrays",
+            knowledge_level="intermediate"
+        )
+
+        self.assertEqual(content["analogy"], "Consecutive lockers in a gym.")
+        self.assertTrue(mock_call.called)
 
     def test_existing_mastery_and_accuracy_pipeline_remains_functional(self):
-        """TEST 12 & 13: Ensure calculate_updated_mastery and adaptive engine updates work with shuffled questions."""
+        """Ensure calculate_updated_mastery and adaptive engine updates work with shuffled questions."""
         question = {
             "difficulty": "medium",
             "cognitive_operation": "apply",
@@ -538,7 +533,6 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
             "correct_index": 2  # Shuffled to Option C
         }
 
-        # Calculate mastery update on correct answer
         initial_mastery = 0.3
         initial_theta = 0.0
         new_mastery, new_theta, metrics = calculate_updated_mastery(
@@ -550,9 +544,190 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
             error_type=None
         )
 
-        # Verify mastery and theta increase on correct answer
         self.assertGreater(new_mastery, initial_mastery)
         self.assertGreater(new_theta, initial_theta)
         self.assertIn('mastery_change', metrics)
         self.assertIn('theta_change', metrics)
         self.assertIn('confidence', metrics)
+
+    @patch.object(OpenRouterQuestionProvider, 'generate_candidate_questions')
+    def test_duplicate_initial_quiz_request_returns_cached_questions(self, mock_gen):
+        """Verify that concurrent or duplicate calls to /auth/api/initial-quiz/ return cached questions without extra LLM requests."""
+        candidates = [
+            {
+                "difficulty": "easy",
+                "cognitive_operation": "recall",
+                "estimated_time": 30,
+                "question": "What is an array?",
+                "options": ["Contiguous memory block", "Linked list", "Tree", "Graph"],
+                "correct_answer": "Contiguous memory block"
+            },
+            {
+                "difficulty": "easy",
+                "cognitive_operation": "apply",
+                "estimated_time": 30,
+                "question": "How to access index 0?",
+                "options": ["arr[0]", "arr.get(0)", "arr->0", "arr.first()"],
+                "correct_answer": "arr[0]"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What is the time complexity of random access?",
+                "options": ["O(1)", "O(n)", "O(log n)", "O(n^2)"],
+                "correct_answer": "O(1)"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What happens on insertion at start?",
+                "options": ["Elements shift right", "Elements shift left", "No change", "Error thrown"],
+                "correct_answer": "Elements shift right"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "apply",
+                "estimated_time": 45,
+                "question": "Which memory layout is used?",
+                "options": ["Linear contiguous addresses", "Non-linear addresses", "Disk blocks", "Registers"],
+                "correct_answer": "Linear contiguous addresses"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What is the space overhead?",
+                "options": ["Minimal / None for pointers", "High overhead", "Variable per element", "Double size"],
+                "correct_answer": "Minimal / None for pointers"
+            }
+        ]
+        mock_gen.return_value = candidates
+
+        # First request
+        resp1 = self.client.post('/auth/api/initial-quiz/', {'session_id': self.session.id}, format='json')
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(len(resp1.data['questions']), 5)
+        self.assertEqual(mock_gen.call_count, 1)
+
+        # Duplicate second request
+        resp2 = self.client.post('/auth/api/initial-quiz/', {'session_id': self.session.id}, format='json')
+        self.assertEqual(resp2.status_code, 200)
+        self.assertTrue(resp2.data.get('reused'))
+        self.assertEqual(len(resp2.data['questions']), 5)
+        # LLM must NOT be called again
+        self.assertEqual(mock_gen.call_count, 1)
+
+    @patch.object(OpenRouterQuestionProvider, 'generate_candidate_questions')
+    def test_duplicate_teaching_questions_request_returns_cached_questions(self, mock_gen):
+        """Verify that duplicate calls to generate-questions-from-teaching without force_new return cached questions."""
+        candidates = [
+            {
+                "difficulty": "easy",
+                "cognitive_operation": "recall",
+                "estimated_time": 30,
+                "question": "What is contiguous memory?",
+                "options": ["Adjacent memory cells", "Scattered memory cells", "Virtual cache", "Secondary storage"],
+                "correct_answer": "Adjacent memory cells"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "apply",
+                "estimated_time": 45,
+                "question": "How does cache prefetching benefit arrays?",
+                "options": ["Loads consecutive memory words", "Clears cache", "Sorts items", "Free memory"],
+                "correct_answer": "Loads consecutive memory words"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What causes spatial locality?",
+                "options": ["Consecutive memory accesses", "Random memory accesses", "Branch misprediction", "Page faults"],
+                "correct_answer": "Consecutive memory accesses"
+            },
+            {
+                "difficulty": "hard",
+                "cognitive_operation": "analyze",
+                "estimated_time": 60,
+                "question": "How does hardware translation handle row-major multi-dimensional indexing?",
+                "options": ["Row stride offset multiplication", "Pointer indirection array", "Hash bucket lookup", "Dynamic relocation table"],
+                "correct_answer": "Row stride offset multiplication"
+            },
+            {
+                "difficulty": "hard",
+                "cognitive_operation": "apply",
+                "estimated_time": 60,
+                "question": "Under what memory access pattern does an array suffer high cache miss penalty?",
+                "options": ["Non-unit large column stride access", "Sequential traversal", "Reverse traversal", "Contiguous iteration"],
+                "correct_answer": "Non-unit large column stride access"
+            }
+        ]
+        mock_gen.return_value = candidates
+
+        # First request
+        resp1 = self.client.post('/auth/api/generate-questions-from-teaching/', {
+            'session_id': self.session.id,
+            'atom_id': self.atom.id
+        }, format='json')
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(mock_gen.call_count, 1)
+
+        # Duplicate request (e.g. fast double-click or concurrent render)
+        resp2 = self.client.post('/auth/api/generate-questions-from-teaching/', {
+            'session_id': self.session.id,
+            'atom_id': self.atom.id
+        }, format='json')
+        self.assertEqual(resp2.status_code, 200)
+        self.assertTrue(resp2.data.get('reused'))
+        # LLM must NOT be called again
+        self.assertEqual(mock_gen.call_count, 1)
+
+    def test_permanent_error_fails_fast_without_retrying(self):
+        """Verify that permanent errors (e.g. 401 Unauthorized, 404 Model Not Found) terminate immediately on Attempt 1."""
+        mock_provider = MagicMock(spec=OpenRouterQuestionProvider)
+        mock_provider.api_key = "bad-key"
+        mock_provider.model_name = "test-model"
+        mock_provider.is_permanent_error.return_value = True
+        mock_provider.generate_candidate_questions.side_effect = Exception("OpenRouter API returned HTTP 401: Unauthorized")
+
+        gen = QuestionGenerator(provider=mock_provider)
+        with self.assertRaises(QuestionGenerationError):
+            gen.generate_questions_from_teaching(
+                subject="Computer Science",
+                concept="Arrays",
+                atom="Contiguous Memory",
+                teaching_content={"explanation": "test"},
+                need_easy=1,
+                need_medium=1,
+                need_hard=0
+            )
+
+        # Permanent error must fail fast after exactly 1 attempt
+        self.assertEqual(mock_provider.generate_candidate_questions.call_count, 1)
+
+    def test_transient_error_allows_one_retry(self):
+        """Verify that transient errors (e.g. 429 Rate Limit, timeout) are retried at most once (2 total attempts)."""
+        mock_provider = MagicMock(spec=OpenRouterQuestionProvider)
+        mock_provider.api_key = "valid-key"
+        mock_provider.model_name = "test-model"
+        mock_provider.is_permanent_error.return_value = False
+        mock_provider.generate_candidate_questions.side_effect = Exception("OpenRouter connection timed out")
+
+        gen = QuestionGenerator(provider=mock_provider)
+        with self.assertRaises(QuestionGenerationError):
+            gen.generate_questions_from_teaching(
+                subject="Computer Science",
+                concept="Arrays",
+                atom="Contiguous Memory",
+                teaching_content={"explanation": "test"},
+                need_easy=1,
+                need_medium=1,
+                need_hard=0
+            )
+
+        # Transient error allows at most 2 attempts
+        self.assertEqual(mock_provider.generate_candidate_questions.call_count, 2)
+
+

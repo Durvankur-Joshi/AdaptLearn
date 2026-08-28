@@ -315,17 +315,21 @@ const TeachingFirstFlow = ({ conceptId, knowledgeLevel = 'intermediate' }) => {
     const sessionIdRef = useRef(null);
     const conceptIdRef = useRef(conceptId);
     const flowStateRef = useRef(flowState);
+    const sessionInitInProgressRef = useRef(false);
+    const isGeneratingQuestionsRef = useRef(false);
+    const isGeneratingQuizRef = useRef(false);
 
     // Update ref when flowState changes
     useEffect(() => {
         flowStateRef.current = flowState;
     }, [flowState]);
 
-    // Initialize session
+    // Initialize session with in-flight concurrency guard
     useEffect(() => {
         const initSession = async () => {
-            if (!conceptId || sessionStarted) return;
+            if (!conceptId || sessionStarted || sessionInitInProgressRef.current) return;
 
+            sessionInitInProgressRef.current = true;
             setFlowState('initializing');
             setError(null);
 
@@ -347,6 +351,7 @@ const TeachingFirstFlow = ({ conceptId, knowledgeLevel = 'intermediate' }) => {
                     if (!firstAtom) {
                         setError('No atoms available for this concept');
                         setFlowState('error');
+                        sessionInitInProgressRef.current = false;
                         return;
                     }
 
@@ -399,16 +404,19 @@ const TeachingFirstFlow = ({ conceptId, knowledgeLevel = 'intermediate' }) => {
                         } else {
                             setError(quizResult.error || 'Failed to generate initial quiz');
                             setFlowState('error');
+                            sessionInitInProgressRef.current = false;
                         }
                     }
                 } else {
                     setError(result.error || 'Failed to start session');
                     setFlowState('error');
+                    sessionInitInProgressRef.current = false;
                 }
             } catch (err) {
                 console.error('Error starting session:', err);
                 setError('Failed to start learning session');
                 setFlowState('error');
+                sessionInitInProgressRef.current = false;
             }
         };
 
@@ -448,7 +456,8 @@ const TeachingFirstFlow = ({ conceptId, knowledgeLevel = 'intermediate' }) => {
 
     // Handle concept overview continue → go to diagnostic quiz
     const handleConceptOverviewContinue = useCallback(async () => {
-        if (!currentSession?.session_id) return;
+        if (!currentSession?.session_id || isGeneratingQuizRef.current) return;
+        isGeneratingQuizRef.current = true;
 
         setFlowState('loading');
         setError(null);
@@ -484,15 +493,17 @@ const TeachingFirstFlow = ({ conceptId, knowledgeLevel = 'intermediate' }) => {
             console.error('Error after concept overview:', err);
             setError('Failed to generate quiz');
             setFlowState('error');
+        } finally {
+            isGeneratingQuizRef.current = false;
         }
     }, [currentSession, currentAtomData, generateInitialQuiz, getTeachingContent]);
 
-    // Handle continue to questions
+    // Handle continue to questions with double-click guard
     const handleContinueToQuestions = useCallback(async () => {
-        if (!currentSession?.session_id || !currentAtomData?.id) {
-            console.error('Missing session or atom data');
+        if (!currentSession?.session_id || !currentAtomData?.id || isGeneratingQuestionsRef.current) {
             return;
         }
+        isGeneratingQuestionsRef.current = true;
 
         setFlowState('loading');
         setError(null);
@@ -514,6 +525,8 @@ const TeachingFirstFlow = ({ conceptId, knowledgeLevel = 'intermediate' }) => {
             console.error('Error generating questions:', err);
             setError('Failed to generate questions');
             setFlowState('error');
+        } finally {
+            isGeneratingQuestionsRef.current = false;
         }
     }, [currentSession, currentAtomData, generateQuestionsFromTeaching]);
 
