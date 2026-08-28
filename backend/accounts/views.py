@@ -40,7 +40,7 @@ from .serializers import (
     StudentDetailSerializer, StudentProgressSerializer,
     ParentProfileSerializer, ParentRegisterSerializer, ParentChildSerializer,
 )
-from learning_engine.question_generator import QuestionGenerator
+from learning_engine.question_generator import QuestionGenerator, QuestionGenerationError
 from learning_engine.adaptive_flow import AdaptiveLearningEngine, MASTERY_THRESHOLD
 from django.conf import settings
 from learning_engine.knowledge_tracing import (
@@ -930,12 +930,25 @@ class GenerateInitialQuizView(APIView):
 
         concept = session.concept
         generator = QuestionGenerator()
-        questions = generator.generate_initial_quiz(
-            subject=concept.subject,
-            concept=concept.name,
-            knowledge_level=session.knowledge_level,
-            count=5
-        )
+        try:
+            questions = generator.generate_initial_quiz(
+                subject=concept.subject,
+                concept=concept.name,
+                knowledge_level=session.knowledge_level,
+                count=5
+            )
+        except Exception as q_err:
+            logger.error(f"Error generating initial quiz via Groq: {q_err}")
+            return Response(
+                {'error': 'Question generation temporarily unavailable. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        if not questions:
+            return Response(
+                {'error': 'Question generation temporarily unavailable. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
 
         # Store full questions for grading
         session_data = session.session_data or {}
@@ -1341,14 +1354,67 @@ class GetTeachingContentView(APIView):
         return base_level
 
 
+def _collect_user_question_history(user, atom, session=None, limit=20):
+    """
+    Collect questions previously presented to this user on this atom and concept.
+    Gathers questions from:
+    1. Current session asked_questions_history and questions
+    2. Past LearningSession instances for this user and concept
+    Returns a deduplicated list of question dicts/strings.
+    """
+    history = []
+    seen_texts = set()
+
+    def add_q(q_item):
+        if not q_item:
+            return
+        q_text = q_item.get('question') if isinstance(q_item, dict) else str(q_item)
+        norm = ' '.join(q_text.lower().split()) if q_text else ''
+        if norm and norm not in seen_texts:
+            seen_texts.add(norm)
+            history.append(q_item)
+
+    # 1. From current session
+    if session and session.session_data:
+        sdata = session.session_data
+        for q in sdata.get('asked_questions_history', []):
+            add_q(q)
+        for q in sdata.get('questions', []):
+            add_q(q)
+        for q in sdata.get('final_questions', []):
+            add_q(q)
+
+    # 2. From past sessions for this user on the same concept
+    concept = atom.concept if atom else (session.concept if session else None)
+    if user and concept:
+        past_sessions = LearningSession.objects.filter(
+            user=user,
+            concept=concept
+        ).order_by('-start_time')
+        if session:
+            past_sessions = past_sessions.exclude(id=session.id)
+        for ps in past_sessions[:5]:
+            ps_data = ps.session_data or {}
+            for q in ps_data.get('asked_questions_history', []):
+                add_q(q)
+            for q in ps_data.get('questions', []):
+                add_q(q)
+
+    return history[-limit:]
+
+
 class GenerateQuestionsFromTeachingView(APIView):
-    """Step 4: Generate questions after teaching with pacing consideration"""
+    """Step 4: Generate questions after teaching with pacing consideration and novelty guarantee"""
     permission_classes = [IsAuthenticated]
     
     def post(self, request):
         session_id = request.data.get('session_id')
         atom_id = request.data.get('atom_id')
-        force_new = bool(request.data.get('force_new', False))
+        force_new_raw = request.data.get('force_new', False)
+        if isinstance(force_new_raw, str):
+            force_new = force_new_raw.strip().lower() in ('true', '1', 'yes', 't')
+        else:
+            force_new = bool(force_new_raw)
         
         try:
             session = LearningSession.objects.get(id=session_id, user=request.user)
@@ -1367,10 +1433,42 @@ class GenerateQuestionsFromTeachingView(APIView):
         progress.save()
         
         # Get current pacing
-        session_data = session.session_data
+        session_data = session.session_data or {}
         pacing_history = session_data.get('pacing_history', [])
         current_pacing = _normalize_pacing_value(pacing_history[-1], 'stay') if pacing_history else 'stay'
         
+        # Honor force_new:
+        # If force_new is False and session already has generated questions for this atom that haven't been completed, reuse them
+        existing_questions = session_data.get('questions', [])
+        existing_atom_id = session_data.get('current_atom_id')
+        answers_in_batch = len(session_data.get('answers', []))
+
+        if not force_new and existing_questions and existing_atom_id == atom.id and answers_in_batch < len(existing_questions):
+            questions_data = []
+            for q_data in existing_questions:
+                questions_data.append({
+                    'difficulty': q_data.get('difficulty', 'medium'),
+                    'cognitive_operation': q_data.get('cognitive_operation', 'apply'),
+                    'estimated_time': q_data.get('estimated_time', 60),
+                    'question': q_data.get('question', ''),
+                    'options': q_data.get('options', [])
+                })
+            return Response({
+                'atom_id': atom.id,
+                'atom_name': atom.name,
+                'questions': questions_data,
+                'total_questions': len(questions_data),
+                'current_pacing': current_pacing,
+                'reused': True
+            })
+
+        # Collect previous question history for this student on this atom/concept
+        question_history = _collect_user_question_history(
+            user=request.user,
+            atom=atom,
+            session=session
+        )
+
         # Always generate questions FROM teaching content for this flow
         generator = QuestionGenerator()
 
@@ -1387,7 +1485,6 @@ class GenerateQuestionsFromTeachingView(APIView):
         if not teaching_content['explanation']:
             engine = AdaptiveLearningEngine()
             # Get quiz mastery for depth adaptation
-            session_data = session.session_data or {}
             quiz_eval = session_data.get('initial_quiz_evaluation', {})
             quiz_running = session_data.get('quiz_running_state', {})
             quiz_mastery = float(quiz_eval.get('mastery', quiz_running.get('mastery', 0.0)))
@@ -1408,21 +1505,34 @@ class GenerateQuestionsFromTeachingView(APIView):
                 ]
             }
 
-        generated = generator.generate_questions_from_teaching(
-            subject=atom.concept.subject,
-            concept=atom.concept.name,
-            atom=atom.name,
-            teaching_content=teaching_content,
-            need_easy=int(level_config.get('easy', 0) or 0),
-            need_medium=int(level_config.get('medium', 0) or 0),
-            need_hard=int(level_config.get('hard', 0) or 0),
-            knowledge_level=session.knowledge_level
-        )
+        try:
+            generated = generator.generate_questions_from_teaching(
+                subject=atom.concept.subject,
+                concept=atom.concept.name,
+                atom=atom.name,
+                teaching_content=teaching_content,
+                need_easy=int(level_config.get('easy', 0) or 0),
+                need_medium=int(level_config.get('medium', 0) or 0),
+                need_hard=int(level_config.get('hard', 0) or 0),
+                knowledge_level=session.knowledge_level,
+                previous_questions=question_history
+            )
+        except Exception as q_err:
+            logger.error(f"Error generating questions from teaching via Groq: {q_err}")
+            return Response(
+                {'error': 'Question generation temporarily unavailable. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        if not generated:
+            return Response(
+                {'error': 'Question generation temporarily unavailable. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
 
         # Prepare response + session grading payload
         questions_data = []
         full_questions = []
-        saved_db_ids = []
         for q_data in generated:
             adj_time = self._adjust_time_for_pacing(
                 q_data['estimated_time'],
@@ -1447,7 +1557,7 @@ class GenerateQuestionsFromTeachingView(APIView):
 
             # Persist to Question model so teachers can review
             try:
-                db_q = Question.objects.create(
+                Question.objects.create(
                     atom=atom,
                     difficulty=q_data['difficulty'],
                     cognitive_operation=q_data.get('cognitive_operation', 'apply'),
@@ -1456,13 +1566,17 @@ class GenerateQuestionsFromTeachingView(APIView):
                     options=q_data['options'],
                     correct_index=q_data['correct_index'],
                 )
-                saved_db_ids.append(db_q.id)
             except Exception as save_err:
                 print(f"Warning: failed to persist question to DB: {save_err}")
         
         # Update session
+        session_data['current_atom_id'] = atom.id
         session_data['current_phase'] = 'questions'
         session_data['questions'] = full_questions
+        # Append newly accepted questions to asked_questions_history
+        history_list = session_data.setdefault('asked_questions_history', [])
+        for fq in full_questions:
+            history_list.append(fq)
         session.session_data = session_data
         session.save()
         
@@ -2584,23 +2698,47 @@ class GenerateFinalChallengeView(APIView):
             'examples': atom.examples or []
         }
 
-        generator = QuestionGenerator()
-        final_questions = generator.generate_questions_from_teaching(
-            subject=atom.concept.subject,
-            concept=atom.concept.name,
-            atom=atom.name,
-            teaching_content=teaching_content,
-            need_easy=0,
-            need_medium=2,
-            need_hard=3,
-            knowledge_level=session.knowledge_level
+        question_history = _collect_user_question_history(
+            user=request.user,
+            atom=atom,
+            session=session
         )
 
+        generator = QuestionGenerator()
+        try:
+            final_questions = generator.generate_questions_from_teaching(
+                subject=atom.concept.subject,
+                concept=atom.concept.name,
+                atom=atom.name,
+                teaching_content=teaching_content,
+                need_easy=0,
+                need_medium=2,
+                need_hard=3,
+                knowledge_level=session.knowledge_level,
+                previous_questions=question_history
+            )
+        except Exception as q_err:
+            logger.error(f"Error generating final challenge questions via Groq: {q_err}")
+            return Response(
+                {'error': 'Question generation temporarily unavailable. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        if not final_questions:
+            return Response(
+                {'error': 'Question generation temporarily unavailable. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
         # Store full questions for grading
-        session_data = session.session_data
+        session_data = session.session_data or {}
         session_data['final_questions'] = final_questions
         session_data['final_answers'] = []
         session_data['current_phase'] = 'final_challenge'
+        # Append to session history
+        history_list = session_data.setdefault('asked_questions_history', [])
+        for fq in final_questions:
+            history_list.append(fq)
         session.session_data = session_data
         session.save()
 
@@ -3273,27 +3411,41 @@ class GenerateConceptFinalChallengeView(APIView):
         generator = QuestionGenerator()
         all_questions = []
 
-        # Generate 2 questions per atom (1 medium + 1 hard) for a comprehensive challenge
-        for atom in atoms:
-            teaching_content = {
-                'explanation': atom.explanation or '',
-                'analogy': atom.analogy or '',
-                'examples': atom.examples or []
-            }
-            qs = generator.generate_questions_from_teaching(
-                subject=concept.subject,
-                concept=concept.name,
-                atom=atom.name,
-                teaching_content=teaching_content,
-                need_easy=0,
-                need_medium=1,
-                need_hard=1,
-                knowledge_level=session.knowledge_level
+        try:
+            for atom in atoms:
+                teaching_content = {
+                    'explanation': atom.explanation or '',
+                    'analogy': atom.analogy or '',
+                    'examples': atom.examples or []
+                }
+                history = _collect_user_question_history(user=request.user, atom=atom, session=session)
+                qs = generator.generate_questions_from_teaching(
+                    subject=concept.subject,
+                    concept=concept.name,
+                    atom=atom.name,
+                    teaching_content=teaching_content,
+                    need_easy=0,
+                    need_medium=1,
+                    need_hard=1,
+                    knowledge_level=session.knowledge_level,
+                    previous_questions=history
+                )
+                for q in qs:
+                    q['source_atom_id'] = atom.id
+                    q['source_atom_name'] = atom.name
+                all_questions.extend(qs)
+        except Exception as q_err:
+            logger.error(f"Error generating concept final challenge via Groq: {q_err}")
+            return Response(
+                {'error': 'Question generation temporarily unavailable. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
-            for q in qs:
-                q['source_atom_id'] = atom.id
-                q['source_atom_name'] = atom.name
-            all_questions.extend(qs)
+
+        if not all_questions:
+            return Response(
+                {'error': 'Question generation temporarily unavailable. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
 
         # Store in session
         session_data = session.session_data

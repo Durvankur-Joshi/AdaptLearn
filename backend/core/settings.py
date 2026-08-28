@@ -187,10 +187,13 @@ LEARNING_ENGINE = {
     'BKT_LEARN': 0.15,
 }
 
-# API Keys (set these in environment variables)
+# API Keys & Models (set these in environment variables)
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
+
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant')
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
 
 
 LOGGING = {
