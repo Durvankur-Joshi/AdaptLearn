@@ -1684,7 +1684,7 @@ urlpatterns = [
 ================================================
 FILE: backend/accounts/views.py
 ================================================
-Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 116758: character maps to <undefined>
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 119845: character maps to <undefined>
 
 
 ================================================
@@ -4051,6 +4051,7 @@ import logging
 import os
 import random
 import re
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import requests
@@ -4436,7 +4437,8 @@ class BaseQuestionProvider:
         self,
         prompt: str,
         needed_count: int,
-        temperature: float = DEFAULT_GENERATION_TEMPERATURE
+        temperature: float = DEFAULT_GENERATION_TEMPERATURE,
+        attempt: int = 1
     ) -> List[Dict]:
         raise NotImplementedError
 
@@ -4458,11 +4460,11 @@ class OpenRouterQuestionProvider(BaseQuestionProvider):
 
     def is_permanent_error(self, err: Exception) -> bool:
         err_str = str(err).lower()
-        if "401" in err_str or "403" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
+        if "400" in err_str or "bad request" in err_str:
+            return True
+        if "401" in err_str or "403" in err_str or "unauthorized" in err_str or "forbidden" in err_str or "invalid api key" in err_str:
             return True
         if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str or "not found" in err_str:
-            return True
-        if "429" in err_str or "quota" in err_str or "rate limit" in err_str or "resource_exhausted" in err_str:
             return True
         return False
 
@@ -4470,7 +4472,8 @@ class OpenRouterQuestionProvider(BaseQuestionProvider):
         self,
         prompt: str,
         needed_count: int,
-        temperature: float = DEFAULT_GENERATION_TEMPERATURE
+        temperature: float = DEFAULT_GENERATION_TEMPERATURE,
+        attempt: int = 1
     ) -> List[Dict]:
         if not self.api_key:
             raise QuestionGenerationError("OpenRouter API_KEY is not configured in environment variables.")
@@ -4486,7 +4489,7 @@ class OpenRouterQuestionProvider(BaseQuestionProvider):
 
         # Request N + 1 candidates for N needed questions to minimize roundtrips
         candidate_count = needed_count + 1
-        max_tokens = min(4096, max(1500, 750 * candidate_count))
+        max_tokens = min(2048, max(500, 300 * candidate_count))
 
         payload = {
             "model": self.model_name,
@@ -4504,30 +4507,39 @@ class OpenRouterQuestionProvider(BaseQuestionProvider):
             "max_tokens": max_tokens
         }
 
+        logger.info(f"[OpenRouter] Attempt {attempt}")
+        logger.info("[OpenRouter] Request started")
+        start_time = time.time()
+
         try:
             response = requests.post(
                 OPENROUTER_API_URL,
                 headers=headers,
                 json=payload,
-                timeout=45
+                timeout=30
             )
+            latency_ms = int((time.time() - start_time) * 1000)
+            logger.info("[OpenRouter] Request completed")
+            logger.info(f"[OpenRouter] Latency={latency_ms} ms")
         except requests.exceptions.Timeout as te:
-            logger.warning("OpenRouter request timed out.")
+            latency_ms = int((time.time() - start_time) * 1000)
+            logger.warning(f"[OpenRouter] Request timed out after {latency_ms} ms: {te}")
             raise Exception(f"OpenRouter connection timed out: {te}")
         except Exception as e:
-            logger.warning(f"OpenRouter connection failed: {e}")
+            latency_ms = int((time.time() - start_time) * 1000)
+            logger.warning(f"[OpenRouter] Connection failed after {latency_ms} ms: {e}")
             raise Exception(f"OpenRouter connection error: {e}")
 
         if response.status_code != 200:
             err_msg = f"OpenRouter API returned HTTP {response.status_code}: {response.text[:300]}"
-            logger.warning(err_msg)
+            logger.warning(f"[OpenRouter] API error: {err_msg}")
             raise Exception(err_msg)
 
         try:
             res_json = response.json()
             raw_text = res_json['choices'][0]['message']['content'] or ""
         except Exception as e:
-            logger.warning(f"Failed to extract message content from OpenRouter response: {e}")
+            logger.warning(f"[OpenRouter] Failed to extract message content from response: {e}")
             raw_text = response.text or ""
 
         return safe_parse_json_questions(raw_text)
@@ -4560,7 +4572,8 @@ class QuestionGenerator:
         need_easy: int,
         need_medium: int,
         need_hard: int,
-        history_pool: List[Union[Dict, str]]
+        history_pool: List[Union[Dict, str]],
+        session_id: Optional[str] = None
     ) -> List[Dict]:
         """
         Generic OpenRouter generation engine:
@@ -4576,47 +4589,51 @@ class QuestionGenerator:
         remaining_medium = need_medium
         remaining_hard = need_hard
 
-        logger.info(f"Question generation started. Provider=OpenRouter, Model={self.provider.model_name}")
+        logger.info(f"[QuestionGeneration] Session={session_id or 'N/A'} Provider=OpenRouter Model={self.provider.model_name} Requested questions={total_needed}")
 
         for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
             needed_now = total_needed - len(accepted_questions)
             if needed_now <= 0:
                 break
 
-            logger.info(f"OpenRouter Attempt {attempt}/{MAX_GENERATION_ATTEMPTS} requesting {needed_now} needed question(s)")
             prompt = build_prompt_fn(needed_now, remaining_easy, remaining_medium, remaining_hard, history_pool)
 
             try:
                 candidates = self.provider.generate_candidate_questions(
                     prompt=prompt,
                     needed_count=needed_now,
-                    temperature=DEFAULT_GENERATION_TEMPERATURE
+                    temperature=DEFAULT_GENERATION_TEMPERATURE,
+                    attempt=attempt
                 )
             except Exception as e:
                 is_perm = self.provider.is_permanent_error(e)
-                logger.warning(f"OpenRouter generation attempt {attempt} failed: {e} (permanent={is_perm})")
+                logger.warning(f"[OpenRouter] Generation attempt {attempt} failed: {e} (permanent={is_perm})")
                 if is_perm:
-                    logger.error("OpenRouter encountered permanent error; terminating generation pipeline.")
+                    logger.error("[OpenRouter] Encountered permanent error; terminating generation pipeline.")
                     break
                 if attempt == MAX_GENERATION_ATTEMPTS:
-                    logger.error("OpenRouter exhausted retries.")
+                    logger.error("[OpenRouter] Exhausted retries.")
                 continue
+
+            novelty_accepted = 0
+            novelty_rejected = 0
 
             for candidate in candidates:
                 sanitized = _validate_single_question(candidate)
                 if not sanitized:
-                    logger.warning("QUALITY_GATE [OpenRouter]: Candidate rejected due to schema/validation failure.")
+                    logger.warning("[QUALITY_GATE] Candidate rejected due to schema/validation failure.")
                     continue
 
                 is_novel, sim_score, matched_q = is_novel_question(sanitized, history_pool)
                 if not is_novel:
+                    novelty_rejected += 1
                     logger.info(
-                        f"NOVELTY_GATE [OpenRouter]: Duplicate rejected (sim={sim_score:.3f} >= {QUESTION_SIMILARITY_THRESHOLD}) "
+                        f"[NoveltyGate] Duplicate rejected (sim={sim_score:.3f} >= {QUESTION_SIMILARITY_THRESHOLD}) "
                         f"matched: '{matched_q}' | candidate: '{sanitized['question']}'"
                     )
                     continue
 
-                logger.info(f"NOVELTY_GATE [OpenRouter]: Accepted novel candidate (max_sim={sim_score:.3f}): '{sanitized['question']}'")
+                novelty_accepted += 1
                 accepted_questions.append(sanitized)
                 history_pool.append(sanitized)
 
@@ -4635,13 +4652,14 @@ class QuestionGenerator:
                 if len(accepted_questions) >= total_needed:
                     break
 
+            logger.info(f"[NoveltyGate] Accepted={novelty_accepted} Rejected={novelty_rejected}")
+
             if len(accepted_questions) >= total_needed:
-                logger.info(f"OpenRouter generation succeeded on attempt {attempt}. Accepted: {len(accepted_questions)}/{total_needed}")
                 break
 
         if len(accepted_questions) < total_needed:
             logger.error(
-                f"OpenRouter failed to produce {total_needed} questions. "
+                f"[QuestionGeneration] OpenRouter failed to produce {total_needed} questions. "
                 f"Generated only {len(accepted_questions)}/{total_needed}. Raising QuestionGenerationError."
             )
             raise QuestionGenerationError(
@@ -4650,7 +4668,7 @@ class QuestionGenerator:
 
         final_batch = accepted_questions[:total_needed]
         balanced_batch = shuffle_and_balance_options(final_batch)
-        logger.info(f"Question generation completed successfully. Returning {len(balanced_batch)} novel, position-balanced questions.")
+        logger.info(f"[QuestionGeneration] Completed Returned={len(balanced_batch)}")
         return balanced_batch
 
     def generate_questions_from_teaching(
@@ -4663,7 +4681,8 @@ class QuestionGenerator:
         need_medium: int = 2,
         need_hard: int = 0,
         knowledge_level: str = 'intermediate',
-        previous_questions: Optional[List[Union[Dict, str]]] = None
+        previous_questions: Optional[List[Union[Dict, str]]] = None,
+        session_id: Optional[str] = None
     ) -> List[Dict]:
         """
         Generate novel assessment questions based on teaching content using OpenRouter.
@@ -4771,7 +4790,8 @@ OUTPUT FORMAT:
             need_easy=need_easy,
             need_medium=need_medium,
             need_hard=need_hard,
-            history_pool=history_pool
+            history_pool=history_pool,
+            session_id=session_id
         )
 
     def generate_questions(
@@ -4783,7 +4803,8 @@ OUTPUT FORMAT:
         count: int,
         knowledge_level: str = 'intermediate',
         error_focus: List[str] = None,
-        previous_questions: Optional[List[Union[Dict, str]]] = None
+        previous_questions: Optional[List[Union[Dict, str]]] = None,
+        session_id: Optional[str] = None
     ) -> List[Dict]:
         """
         Generate questions for an atom with dynamic difficulty using OpenRouter.
@@ -4868,7 +4889,8 @@ OUTPUT FORMAT:
             need_easy=easy_c,
             need_medium=med_c,
             need_hard=hard_c,
-            history_pool=history_pool
+            history_pool=history_pool,
+            session_id=session_id
         )
 
     def generate_initial_quiz(
@@ -4877,35 +4899,80 @@ OUTPUT FORMAT:
         concept: str,
         knowledge_level: str = 'intermediate',
         count: int = 5,
-        previous_questions: Optional[List[Union[Dict, str]]] = None
+        previous_questions: Optional[List[Union[Dict, str]]] = None,
+        session_id: Optional[str] = None
     ) -> List[Dict]:
-        """Diagnostic quiz based on subject/concept/knowledge level using OpenRouter."""
+        """Diagnostic quiz based on subject/concept/knowledge level using a single OpenRouter request."""
+        if count <= 0:
+            return []
+
         easy_count = max(1, count // 2)
-        medium_count = max(0, count - easy_count)
+        medium_count = count - easy_count
+        history_pool: List[Union[Dict, str]] = list(previous_questions or [])
 
-        questions = []
-        questions.extend(self.generate_questions(
-            subject=subject,
-            concept=concept,
-            atom=concept,
-            target_difficulty='easy',
-            count=easy_count,
-            knowledge_level=knowledge_level,
-            previous_questions=previous_questions
-        ))
-        if medium_count > 0:
-            medium_prev = list(previous_questions or []) + questions
-            questions.extend(self.generate_questions(
-                subject=subject,
-                concept=concept,
-                atom=concept,
-                target_difficulty='medium',
-                count=medium_count,
-                knowledge_level=knowledge_level,
-                previous_questions=medium_prev
-            ))
+        def build_quiz_prompt(needed_count: int, rem_easy: int, rem_med: int, rem_hard: int, pool: List[Union[Dict, str]]) -> str:
+            candidate_target = needed_count + 1
+            recent_history = pool[-10:]
+            history_lines = []
+            for idx, q in enumerate(recent_history, start=1):
+                q_text = q.get('question', '') if isinstance(q, dict) else str(q)
+                if q_text.strip():
+                    history_lines.append(f"{idx}. {q_text.strip()}")
 
-        return questions
+            history_section = ""
+            if history_lines:
+                history_section = f"""
+PREVIOUSLY ASKED QUESTIONS (DO NOT REPEAT OR REWORD THESE):
+{chr(10).join(history_lines)}
+"""
+
+            return f"""
+You are an expert diagnostic assessment designer creating an initial evaluation quiz.
+
+Subject: {subject}
+Concept: {concept}
+Student Knowledge Level: {knowledge_level.upper()}
+
+{history_section}
+
+TASK:
+Generate EXACTLY {candidate_target} distinct multiple-choice questions to evaluate the student's baseline understanding of "{concept}".
+
+DIFFICULTY DISTRIBUTION:
+- {rem_easy} Easy question(s) testing fundamental terminology, core identification, or basic facts.
+- {rem_med} Medium question(s) testing concept relationships, cause-and-effect, or simple application.
+
+CRITICAL RULES:
+1. Each question must have exactly 4 plausible options.
+2. Exactly one correct option. "correct_answer" must match the exact string of the correct option.
+3. Questions must test conceptual understanding rather than trivial trick questions.
+4. Output STRICT JSON ONLY.
+
+OUTPUT FORMAT:
+{{
+    "questions": [
+        {{
+            "difficulty": "easy",
+            "cognitive_operation": "recall",
+            "estimated_time": 30,
+            "question": "Question text here?",
+            "options": ["Option 1", "Option 2", "Option 3", "Option 4"],
+            "correct_answer": "Option 1",
+            "explanation": "Why this option is correct."
+        }}
+    ]
+}}
+"""
+
+        return self._execute_generation_pipeline(
+            build_prompt_fn=build_quiz_prompt,
+            total_needed=count,
+            need_easy=easy_count,
+            need_medium=medium_count,
+            need_hard=0,
+            history_pool=history_pool,
+            session_id=session_id
+        )
 
     def generate_atoms(self, subject: str, concept: str) -> List[str]:
         """Generate atomic concepts using OpenRouter. Returns empty list on failure so 503 is returned."""
@@ -5642,6 +5709,187 @@ class APIViewAndAdaptiveEngineIntegrationTests(TestCase):
         self.assertIn('mastery_change', metrics)
         self.assertIn('theta_change', metrics)
         self.assertIn('confidence', metrics)
+
+    @patch.object(OpenRouterQuestionProvider, 'generate_candidate_questions')
+    def test_duplicate_initial_quiz_request_returns_cached_questions(self, mock_gen):
+        """Verify that concurrent or duplicate calls to /auth/api/initial-quiz/ return cached questions without extra LLM requests."""
+        candidates = [
+            {
+                "difficulty": "easy",
+                "cognitive_operation": "recall",
+                "estimated_time": 30,
+                "question": "What is an array?",
+                "options": ["Contiguous memory block", "Linked list", "Tree", "Graph"],
+                "correct_answer": "Contiguous memory block"
+            },
+            {
+                "difficulty": "easy",
+                "cognitive_operation": "apply",
+                "estimated_time": 30,
+                "question": "How to access index 0?",
+                "options": ["arr[0]", "arr.get(0)", "arr->0", "arr.first()"],
+                "correct_answer": "arr[0]"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What is the time complexity of random access?",
+                "options": ["O(1)", "O(n)", "O(log n)", "O(n^2)"],
+                "correct_answer": "O(1)"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What happens on insertion at start?",
+                "options": ["Elements shift right", "Elements shift left", "No change", "Error thrown"],
+                "correct_answer": "Elements shift right"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "apply",
+                "estimated_time": 45,
+                "question": "Which memory layout is used?",
+                "options": ["Linear contiguous addresses", "Non-linear addresses", "Disk blocks", "Registers"],
+                "correct_answer": "Linear contiguous addresses"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What is the space overhead?",
+                "options": ["Minimal / None for pointers", "High overhead", "Variable per element", "Double size"],
+                "correct_answer": "Minimal / None for pointers"
+            }
+        ]
+        mock_gen.return_value = candidates
+
+        # First request
+        resp1 = self.client.post('/auth/api/initial-quiz/', {'session_id': self.session.id}, format='json')
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(len(resp1.data['questions']), 5)
+        self.assertEqual(mock_gen.call_count, 1)
+
+        # Duplicate second request
+        resp2 = self.client.post('/auth/api/initial-quiz/', {'session_id': self.session.id}, format='json')
+        self.assertEqual(resp2.status_code, 200)
+        self.assertTrue(resp2.data.get('reused'))
+        self.assertEqual(len(resp2.data['questions']), 5)
+        # LLM must NOT be called again
+        self.assertEqual(mock_gen.call_count, 1)
+
+    @patch.object(OpenRouterQuestionProvider, 'generate_candidate_questions')
+    def test_duplicate_teaching_questions_request_returns_cached_questions(self, mock_gen):
+        """Verify that duplicate calls to generate-questions-from-teaching without force_new return cached questions."""
+        candidates = [
+            {
+                "difficulty": "easy",
+                "cognitive_operation": "recall",
+                "estimated_time": 30,
+                "question": "What is contiguous memory?",
+                "options": ["Adjacent memory cells", "Scattered memory cells", "Virtual cache", "Secondary storage"],
+                "correct_answer": "Adjacent memory cells"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "apply",
+                "estimated_time": 45,
+                "question": "How does cache prefetching benefit arrays?",
+                "options": ["Loads consecutive memory words", "Clears cache", "Sorts items", "Free memory"],
+                "correct_answer": "Loads consecutive memory words"
+            },
+            {
+                "difficulty": "medium",
+                "cognitive_operation": "analyze",
+                "estimated_time": 45,
+                "question": "What causes spatial locality?",
+                "options": ["Consecutive memory accesses", "Random memory accesses", "Branch misprediction", "Page faults"],
+                "correct_answer": "Consecutive memory accesses"
+            },
+            {
+                "difficulty": "hard",
+                "cognitive_operation": "analyze",
+                "estimated_time": 60,
+                "question": "How does hardware translation handle row-major multi-dimensional indexing?",
+                "options": ["Row stride offset multiplication", "Pointer indirection array", "Hash bucket lookup", "Dynamic relocation table"],
+                "correct_answer": "Row stride offset multiplication"
+            },
+            {
+                "difficulty": "hard",
+                "cognitive_operation": "apply",
+                "estimated_time": 60,
+                "question": "Under what memory access pattern does an array suffer high cache miss penalty?",
+                "options": ["Non-unit large column stride access", "Sequential traversal", "Reverse traversal", "Contiguous iteration"],
+                "correct_answer": "Non-unit large column stride access"
+            }
+        ]
+        mock_gen.return_value = candidates
+
+        # First request
+        resp1 = self.client.post('/auth/api/generate-questions-from-teaching/', {
+            'session_id': self.session.id,
+            'atom_id': self.atom.id
+        }, format='json')
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(mock_gen.call_count, 1)
+
+        # Duplicate request (e.g. fast double-click or concurrent render)
+        resp2 = self.client.post('/auth/api/generate-questions-from-teaching/', {
+            'session_id': self.session.id,
+            'atom_id': self.atom.id
+        }, format='json')
+        self.assertEqual(resp2.status_code, 200)
+        self.assertTrue(resp2.data.get('reused'))
+        # LLM must NOT be called again
+        self.assertEqual(mock_gen.call_count, 1)
+
+    def test_permanent_error_fails_fast_without_retrying(self):
+        """Verify that permanent errors (e.g. 401 Unauthorized, 404 Model Not Found) terminate immediately on Attempt 1."""
+        mock_provider = MagicMock(spec=OpenRouterQuestionProvider)
+        mock_provider.api_key = "bad-key"
+        mock_provider.model_name = "test-model"
+        mock_provider.is_permanent_error.return_value = True
+        mock_provider.generate_candidate_questions.side_effect = Exception("OpenRouter API returned HTTP 401: Unauthorized")
+
+        gen = QuestionGenerator(provider=mock_provider)
+        with self.assertRaises(QuestionGenerationError):
+            gen.generate_questions_from_teaching(
+                subject="Computer Science",
+                concept="Arrays",
+                atom="Contiguous Memory",
+                teaching_content={"explanation": "test"},
+                need_easy=1,
+                need_medium=1,
+                need_hard=0
+            )
+
+        # Permanent error must fail fast after exactly 1 attempt
+        self.assertEqual(mock_provider.generate_candidate_questions.call_count, 1)
+
+    def test_transient_error_allows_one_retry(self):
+        """Verify that transient errors (e.g. 429 Rate Limit, timeout) are retried at most once (2 total attempts)."""
+        mock_provider = MagicMock(spec=OpenRouterQuestionProvider)
+        mock_provider.api_key = "valid-key"
+        mock_provider.model_name = "test-model"
+        mock_provider.is_permanent_error.return_value = False
+        mock_provider.generate_candidate_questions.side_effect = Exception("OpenRouter connection timed out")
+
+        gen = QuestionGenerator(provider=mock_provider)
+        with self.assertRaises(QuestionGenerationError):
+            gen.generate_questions_from_teaching(
+                subject="Computer Science",
+                concept="Arrays",
+                atom="Contiguous Memory",
+                teaching_content={"explanation": "test"},
+                need_easy=1,
+                need_medium=1,
+                need_hard=0
+            )
+
+        # Transient error allows at most 2 attempts
+        self.assertEqual(mock_provider.generate_candidate_questions.call_count, 2)
+
 
 
 
@@ -8225,7 +8473,7 @@ export default StartAnyConceptSessionRoute;
 ================================================
 FILE: frontend/src/components/Learning/TeachingFirstFlow.jsx
 ================================================
-Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8d in position 44375: character maps to <undefined>
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8d in position 45185: character maps to <undefined>
 
 
 ================================================
@@ -10972,6 +11220,8 @@ export const LearningProvider = ({ children }) => {
 
     // Race-condition guard: track latest generation request
     const latestQuestionGenId = useRef(0);
+    // In-flight request deduplication map (prevents identical concurrent network calls)
+    const inFlightRequests = useRef({});
 
     // Generate atoms for a concept (no questions)
     const generateConcept = useCallback(async (subject, concept, knowledgeLevel = 'intermediate') => {
@@ -10993,36 +11243,47 @@ export const LearningProvider = ({ children }) => {
         }
     }, []);
 
-    // Start teaching session for a concept
+    // Start teaching session for a concept with in-flight deduplication
     const startTeachingSession = useCallback(async (conceptId, level = 'intermediate') => {
+        const reqKey = `start_session_${conceptId}_${level}`;
+        if (inFlightRequests.current[reqKey]) {
+            return inFlightRequests.current[reqKey];
+        }
+
         setLoading(true);
         setKnowledgeLevel(level);
         setAnswers([]);
         setAtomMastery(0.0);
         setPacingDecision('stay');
         
-        try {
-            const response = await axios.post('/auth/api/start-teaching-session/', {
-                concept_id: conceptId,
-                knowledge_level: level
-            });
-            
-            setCurrentSession(response.data);
-            
-            // If there's a current atom, set it
-            if (response.data.current_atom) {
-                setCurrentAtom(response.data.current_atom);
+        const promise = (async () => {
+            try {
+                const response = await axios.post('/auth/api/start-teaching-session/', {
+                    concept_id: conceptId,
+                    knowledge_level: level
+                });
+                
+                setCurrentSession(response.data);
+                
+                // If there's a current atom, set it
+                if (response.data.current_atom) {
+                    setCurrentAtom(response.data.current_atom);
+                }
+                
+                return { success: true, data: response.data };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: error.response?.data?.error || 'Failed to start session'
+                };
+            } finally {
+                delete inFlightRequests.current[reqKey];
+                setLoading(false);
             }
-            
-            return { success: true, data: response.data };
-        } catch (error) {
-            return {
-                success: false,
-                error: error.response?.data?.error || 'Failed to start session'
-            };
-        } finally {
-            setLoading(false);
-        }
+        })();
+
+        inFlightRequests.current[reqKey] = promise;
+        return promise;
     }, []);
 
     // Get teaching content for an atom
@@ -11072,55 +11333,77 @@ export const LearningProvider = ({ children }) => {
         }
     }, []);
 
-    // Generate questions based on teaching content
+    // Generate questions based on teaching content with in-flight deduplication
     const generateQuestionsFromTeaching = useCallback(async ({ session_id, atom_id, force_new = false }) => {
+        const reqKey = `teaching_questions_${session_id}_${atom_id}_${force_new}`;
+        if (inFlightRequests.current[reqKey]) {
+            return inFlightRequests.current[reqKey];
+        }
+
         setLoading(true);
         const requestId = ++latestQuestionGenId.current;
-        try {
-            const response = await axios.post('/auth/api/generate-questions-from-teaching/', {
-                session_id: session_id,
-                atom_id: atom_id,
-                force_new: force_new
-            });
-            
-            // Only apply state if this is still the latest request (prevents race condition)
-            if (requestId === latestQuestionGenId.current) {
-                setCurrentQuestions(response.data.questions || []);
-                setCurrentQuestionIndex(0);
+        const promise = (async () => {
+            try {
+                const response = await axios.post('/auth/api/generate-questions-from-teaching/', {
+                    session_id: session_id,
+                    atom_id: atom_id,
+                    force_new: force_new
+                });
                 
-                // Start timer for first question
-                questionStartTime.current = Date.now();
+                // Only apply state if this is still the latest request (prevents race condition)
+                if (requestId === latestQuestionGenId.current) {
+                    setCurrentQuestions(response.data.questions || []);
+                    setCurrentQuestionIndex(0);
+                    
+                    // Start timer for first question
+                    questionStartTime.current = Date.now();
+                }
+                
+                return { success: true, data: response.data };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: error.response?.data?.error || 'Failed to generate questions'
+                };
+            } finally {
+                delete inFlightRequests.current[reqKey];
+                if (requestId === latestQuestionGenId.current) {
+                    setLoading(false);
+                }
             }
-            
-            return { success: true, data: response.data };
-        } catch (error) {
-            return {
-                success: false,
-                error: error.response?.data?.error || 'Failed to generate questions'
-            };
-        } finally {
-            if (requestId === latestQuestionGenId.current) {
-                setLoading(false);
-            }
-        }
+        })();
+
+        inFlightRequests.current[reqKey] = promise;
+        return promise;
     }, []);
 
-    // Generate initial diagnostic quiz
+    // Generate initial diagnostic quiz with in-flight deduplication
     const generateInitialQuiz = useCallback(async ({ session_id }) => {
-        setLoading(true);
-        try {
-            const response = await axios.post('/auth/api/initial-quiz/', {
-                session_id: session_id
-            });
-            return { success: true, data: response.data };
-        } catch (error) {
-            return {
-                success: false,
-                error: error.response?.data?.error || 'Failed to generate initial quiz'
-            };
-        } finally {
-            setLoading(false);
+        const reqKey = `initial_quiz_${session_id}`;
+        if (inFlightRequests.current[reqKey]) {
+            return inFlightRequests.current[reqKey];
         }
+
+        setLoading(true);
+        const promise = (async () => {
+            try {
+                const response = await axios.post('/auth/api/initial-quiz/', {
+                    session_id: session_id
+                });
+                return { success: true, data: response.data };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: error.response?.data?.error || 'Failed to generate initial quiz'
+                };
+            } finally {
+                delete inFlightRequests.current[reqKey];
+                setLoading(false);
+            }
+        })();
+
+        inFlightRequests.current[reqKey] = promise;
+        return promise;
     }, []);
 
     const submitInitialQuizAnswer = useCallback(async ({ session_id, question_index, selected, time_taken }) => {
