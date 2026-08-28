@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const axiosInstance = axios.create({
-    baseURL: 'http://localhost:8000', // Use the correct backend API root
+    baseURL: 'https://adaptlearn-bj1g.onrender.com', // Use the correct backend API root
     headers: {
         'Content-Type': 'application/json',
     },
@@ -35,7 +35,7 @@ axiosInstance.interceptors.response.use(
             try {
                 const refreshToken = localStorage.getItem('refresh_token');
                 if (refreshToken) {
-                    const response = await axios.post('https://hackathon-gcoeara.onrender.com/api/token/refresh/', {
+                    const response = await axios.post('https://adaptlearn-bj1g.onrender.com/api/token/refresh/', {
                         refresh: refreshToken
                     });
                     
